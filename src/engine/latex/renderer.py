@@ -1,26 +1,19 @@
-# src/engine/latex/renderer.py
 from io import BytesIO
 
 import matplotlib
-matplotlib.use("Agg")  # 无需 GUI 后端
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from PySide6.QtGui import QImage, QPixmap
 
+#matplotlib.rcParams["mathtext.fontset"] = "stix"          # 比较接近 Times / STIX 那挂
+matplotlib.rcParams["mathtext.fontset"] = "dejavuserif"   # 和 DejaVu Serif 系统 UI 比较搭
 
-def render_latex_block(expr: str, dpi: int = 150, font_size: int = 18) -> QPixmap:
-    """
-    渲染一条 LaTeX 数学表达式为 QPixmap。
-    expr: 不含外层美元符号的表达式，比如 "f(x)=x^2+1"
-    """
-
-    # 新建 figure，大小先随便给，反正用 bbox_inches='tight' 截取内容
+def _render_latex(expr: str, dpi: int, font_size: int, pad_inches: float, color: str = "white") -> QPixmap:
     fig = plt.figure(figsize=(0.01, 0.01))
-    fig.patch.set_alpha(0.0)  # 透明背景
-
-    # 把公式画上去
-    # 注意这里加一层 $ ... $，告诉 mathtext 这是数学模式
-    fig.text(0, 0, f"${expr}$", fontsize=font_size)
+    fig.patch.set_alpha(0.0)
+    fig.text(0, 0, f"${expr}$", fontsize=font_size, color=color)
 
     buf = BytesIO()
     fig.savefig(
@@ -29,12 +22,18 @@ def render_latex_block(expr: str, dpi: int = 150, font_size: int = 18) -> QPixma
         dpi=dpi,
         transparent=True,
         bbox_inches="tight",
-        pad_inches=0.1,
+        pad_inches=pad_inches,
     )
     plt.close(fig)
 
     buf.seek(0)
-    data = buf.getvalue()
+    image = QImage.fromData(buf.getvalue(), "PNG")
+    return QPixmap.fromImage(image)
 
-    img = QImage.fromData(data, "PNG")
-    return QPixmap.fromImage(img)
+
+def render_latex_block(expr: str, dpi: int = 150, font_size: int = 18) -> QPixmap:
+    return _render_latex(expr, dpi=dpi, font_size=font_size, pad_inches=0.1)
+
+
+def render_latex_inline(expr: str, dpi: int = 200, font_size: int = 28) -> QPixmap:
+    return _render_latex(expr, dpi=dpi, font_size=font_size, pad_inches=0.02)

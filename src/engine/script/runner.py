@@ -1,41 +1,49 @@
-# src/engine/script/runner.py
 from typing import Any
 
-from ..ui.game_view import GameView
+from PySide6.QtCore import QTimer
+
 from ..latex.renderer import render_latex_block
+from ..ui.dialogue_text import (
+    DialogueSegment,
+    count_reveal_units,
+    parse_dialogue_segments,
+    slice_dialogue_segments,
+)
+from ..ui.game_view import GameView
 
 
 class ScriptRunner:
-    """
-    最小版脚本执行器：
-      - 支持 say / formula
-      - 按 flow 顺序播放
-      - 每个节点等待一次点击
-    """
-
     def __init__(self, view: GameView, script_data: dict[str, Any]) -> None:
         self.view = view
         self.script_data = script_data
         self.flow: list[str] = script_data.get("flow", [])
         self.nodes: dict[str, dict[str, Any]] = script_data.get("nodes", {})
 
-        self.index: int = 0
-        self.waiting_for_click: bool = False
+        self.index = 0
+        self.waiting_for_click = False
+        self.typing = False
 
-        # 监听点击
+        self.current_segments: list[DialogueSegment] = []
+        self.current_total_units = 0
+        self.current_index = 0
+        self.type_interval_ms = 30
+
+        self.type_timer = QTimer(view)
+        self.type_timer.timeout.connect(self._on_typewriter_tick)
+
         self.view.advanceRequested.connect(self._on_advance_requested)
 
     def start(self) -> None:
         self.index = 0
         self._show_current_node()
 
-    # ====== 内部逻辑 ======
-
     def _show_current_node(self) -> None:
         if self.index >= len(self.flow):
-            # 场景结束
-            self.view.show_text("(场景结束，点击也不会再前进喵)")
+            self.view.set_name("")
+            self.view.show_text("(没有了喵、再点也不会有反应的喵)")
             self.waiting_for_click = False
+            self.typing = False
+            self.type_timer.stop()
             return
 
         node_id = self.flow[self.index]
@@ -43,47 +51,78 @@ class ScriptRunner:
         node_type = node.get("type")
 
         if node_type == "say":
-            speaker = node.get("speaker", "")
-            text = node.get("text", "")
+            self.view.set_name(node.get("speaker", ""))
+            self._start_typewriter(node.get("text", ""))
+            return
 
-            # 新：单独设置姓名框和正文
-            if speaker:
-                self.view.set_name(speaker)
-            else:
-                self.view.set_name("")
-
-            self.view.show_text(text)
-            self.waiting_for_click = True
-
-        elif node_type == "formula":
-            # 公式节点可以选择清空 name 或保留上一句说话的人，看你演出需求
+        if node_type == "formula":
             self.view.set_name("")
             expr = node.get("latex", "")
             if not expr:
                 self.view.show_text("(空公式节点)")
             else:
-                pix = render_latex_block(expr)
-                self.view.show_formula(pix)
+                self.view.show_formula(render_latex_block(expr))
+
+            self.typing = False
             self.waiting_for_click = True
-        
-        elif node_type == "bg":
-            # 背景切换节点
+            return
+
+        if node_type == "bg":
             filename = node.get("file", "")
             if filename:
                 self.view.set_background(filename)
+
             self.index += 1
             self._show_current_node()
             return
-        
-        else:
-            # 未知节点类型，直接跳过
-            self.index += 1
-            self._show_current_node()
 
-    def _on_advance_requested(self) -> None:
-        if not self.waiting_for_click:
-            return
-
-        self.waiting_for_click = False
         self.index += 1
         self._show_current_node()
+
+    def _start_typewriter(self, text: str) -> None:
+        self.current_segments = parse_dialogue_segments(text)
+        self.current_total_units = count_reveal_units(self.current_segments)
+        self.current_index = 0
+
+        self.typing = True
+        self.waiting_for_click = False
+
+        self.view.show_text_segments([])
+
+        self.type_timer.stop()
+        if self.current_total_units == 0:
+            self.typing = False
+            self.waiting_for_click = True
+            return
+
+        self.type_timer.start(self.type_interval_ms)
+
+    def _on_typewriter_tick(self) -> None:
+        if not self.typing:
+            self.type_timer.stop()
+            return
+
+        if self.current_index >= self.current_total_units:
+            self.type_timer.stop()
+            self.typing = False
+            self.waiting_for_click = True
+            self.view.show_text_segments(self.current_segments)
+            return
+
+        self.current_index += 1
+        self.view.show_text_segments(
+            slice_dialogue_segments(self.current_segments, self.current_index)
+        )
+
+    def _on_advance_requested(self) -> None:
+        if self.typing:
+            self.type_timer.stop()
+            self.typing = False
+            self.waiting_for_click = True
+            self.view.show_text_segments(self.current_segments)
+            return
+
+        if self.waiting_for_click:
+            self.waiting_for_click = False
+            self.index += 1
+            self._show_current_node()

@@ -7,7 +7,7 @@ class GameWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        self.setWindowTitle("Math VN Engine (prototype)")
+        self.setWindowTitle("VECTORSP∀⊂∃(prototype)")
         self.resize(1920, 1080)
         # 如果你现在就想锁死分辨率也可以：
         # self.setFixedSize(1920, 1080)

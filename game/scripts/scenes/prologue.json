@@ -1,11 +1,15 @@
 {
   "id": "prologue",
-  "start": "s1",
+  "start": "bg0",
   "nodes": {
+    "bg0": {
+      "type": "bg",
+      "file": "bg_vstest.png"
+    },
     "s1": {
       "type": "say",
       "speaker": "?",
-      "text": "ciallo~这是一行测试文本这是一行测试文本这是一行测试文本这是一行测试文本这是一行测试文本！@#￥%……&*（"
+      "text": "ciallo~这是一行测试文本这是一行测试文本 $f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本这是一行测试文本这是一行测试文本！@#￥%……&*（"
     },
     "s2": {
       "type": "say",
@@ -27,5 +31,5 @@
       "text": "测试"
     }
   },
-  "flow": ["s1", "s2", "s3", "s4", "s5"]
+  "flow": ["bg0","s1", "s2", "s3", "s4", "s5"]
 }
