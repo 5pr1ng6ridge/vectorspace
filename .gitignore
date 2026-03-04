@@ -1,4 +1,5 @@
 .vscode/
+.gitignore
 src/test/
 
 # Byte-compiled / optimized / DLL files

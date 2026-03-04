@@ -5,7 +5,7 @@
     "s1": {
       "type": "say",
       "speaker": "?",
-      "text": "ciallo~"
+      "text": "ciallo~这是一行测试文本这是一行测试文本这是一行测试文本这是一行测试文本这是一行测试文本！@#￥%……&*（"
     },
     "s2": {
       "type": "say",
@@ -18,9 +18,8 @@
       "text": "1919810"
     },
     "s4": {
-      "type": "say",
-      "speaker": "?",
-      "text": "testtext"
+      "type": "formula",
+      "latex": "f(x)=x^2+1"
     },
     "s5": {
       "type": "say",
