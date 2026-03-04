@@ -1,0 +1,32 @@
+{
+  "id": "prologue",
+  "start": "s1",
+  "nodes": {
+    "s1": {
+      "type": "say",
+      "speaker": "?",
+      "text": "ciallo~"
+    },
+    "s2": {
+      "type": "say",
+      "speaker": "?",
+      "text": "114514"
+    },
+    "s3": {
+      "type": "say",
+      "speaker": "?",
+      "text": "1919810"
+    },
+    "s4": {
+      "type": "say",
+      "speaker": "?",
+      "text": "testtext"
+    },
+    "s5": {
+      "type": "say",
+      "speaker": "?",
+      "text": "测试"
+    }
+  },
+  "flow": ["s1", "s2", "s3", "s4", "s5"]
+}
