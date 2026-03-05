@@ -3,17 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import (
-    QColor,
-    QFont,
-    QImage,
-    QPixmap,
-    QTextCharFormat,
-    QTextCursor,
-    QTextDocument,
-    QTextImageFormat,
-    QTextOption,
-)
+from PySide6.QtGui import QColor, QFont, QImage, QPixmap, QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat, QTextOption
 from PySide6.QtWidgets import QFrame, QTextBrowser
 
 from ..latex.renderer import render_latex_inline
@@ -97,39 +87,10 @@ def count_reveal_units(segments: list[DialogueSegment]) -> int:
     return total
 
 
-def slice_dialogue_segments(
-    segments: list[DialogueSegment], visible_units: int
-) -> list[DialogueSegment]:
-    if visible_units <= 0:
-        return []
-
-    visible: list[DialogueSegment] = []
-    remaining = visible_units
-
-    for segment in segments:
-        if remaining <= 0:
-            break
-
-        if segment.kind == "formula":
-            visible.append(segment)
-            remaining -= 1
-            continue
-
-        if remaining >= len(segment.content):
-            visible.append(segment)
-            remaining -= len(segment.content)
-            continue
-
-        visible.append(DialogueSegment("text", segment.content[:remaining]))
-        remaining = 0
-
-    return visible
-
-
 class DialogueTextView(QTextBrowser):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._formula_cache: dict[tuple[str, int], QImage] = {}
+        self._formula_cache: dict[tuple[str, int, bool], QImage] = {}
         self._resource_counter = 0
 
         self.setFrameShape(QFrame.NoFrame)
@@ -151,11 +112,13 @@ class DialogueTextView(QTextBrowser):
         super().setFont(font)
         self.document().setDefaultFont(font)
 
-    def set_text_segments(self, segments: list[DialogueSegment]) -> None:
-        self._render_segments(segments)
+    def set_text_segments(
+        self, segments: list[DialogueSegment], visible_units: int | None = None
+    ) -> None:
+        self._render_segments(segments, visible_units)
 
     def set_plain_dialogue(self, text: str) -> None:
-        self._render_segments(parse_dialogue_segments(text))
+        self._render_segments(parse_dialogue_segments(text), None)
 
     def set_formula_pixmap(self, pixmap: QPixmap) -> None:
         document = self.document()
@@ -168,40 +131,73 @@ class DialogueTextView(QTextBrowser):
         image_format.setHeight(pixmap.height())
         cursor.insertImage(image_format)
 
-    def _render_segments(self, segments: list[DialogueSegment]) -> None:
+    def _render_segments(
+        self, segments: list[DialogueSegment], visible_units: int | None
+    ) -> None:
         document = self.document()
         document.clear()
 
         cursor = QTextCursor(document)
-        text_format = QTextCharFormat()
-        text_format.setFont(self.font())
-        text_format.setForeground(self.textColor())
-        cursor.setCharFormat(text_format)
+        visible_text_format = QTextCharFormat()
+        visible_text_format.setFont(self.font())
+        visible_text_format.setForeground(self.textColor())
+        cursor.setCharFormat(visible_text_format)
+
+        hidden_text_format = QTextCharFormat(visible_text_format)
+        hidden_color = QColor(self.textColor())
+        hidden_color.setAlpha(0)
+        hidden_text_format.setForeground(hidden_color)
 
         inline_font_size = max(16, int(round(self.font().pointSizeF() * 0.4)))
+        remaining = visible_units
 
         for segment in segments:
             if segment.kind == "formula":
-                image = self._get_formula_image(segment.content, inline_font_size)
+                is_visible = remaining is None or remaining > 0
+                image = self._get_formula_image(
+                    segment.content,
+                    inline_font_size,
+                    visible=is_visible,
+                )
                 image_format = QTextImageFormat()
                 image_format.setName(self._register_image(image))
                 image_format.setWidth(image.width())
                 image_format.setHeight(image.height())
                 image_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignMiddle)
                 cursor.insertImage(image_format)
+                if remaining is not None and remaining > 0:
+                    remaining -= 1
                 continue
 
-            cursor.insertText(segment.content, text_format)
+            if remaining is None:
+                cursor.insertText(segment.content, visible_text_format)
+                continue
+
+            if remaining <= 0:
+                cursor.insertText(segment.content, hidden_text_format)
+                continue
+
+            visible_text = segment.content[:remaining]
+            hidden_text = segment.content[remaining:]
+            if visible_text:
+                cursor.insertText(visible_text, visible_text_format)
+            if hidden_text:
+                cursor.insertText(hidden_text, hidden_text_format)
+            remaining -= len(visible_text)
 
         cursor.clearSelection()
 
-    def _get_formula_image(self, expr: str, font_size: int) -> QImage:
-        cache_key = (expr, font_size)
+    def _get_formula_image(self, expr: str, font_size: int, visible: bool) -> QImage:
+        cache_key = (expr, font_size, visible)
         cached = self._formula_cache.get(cache_key)
         if cached is not None:
             return cached
 
         image = render_latex_inline(expr, font_size=font_size).toImage()
+        if not visible:
+            hidden = QImage(image.size(), QImage.Format_ARGB32_Premultiplied)
+            hidden.fill(Qt.GlobalColor.transparent)
+            image = hidden
         self._formula_cache[cache_key] = image
         return image
 

@@ -9,7 +9,7 @@
     "s1": {
       "type": "say",
       "speaker": "?",
-      "text": "ciallo~这是一行测试文本这是一行测试文本 $f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本这是一行测试文本这是一行测试文本！@#￥%……&*（"
+      "text": "ciallo~这是一行测试文本这是一行测试文本 $f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本这是$f(x) = f(a) + f'(a)(x-a) + \\frac{f''(a)}{2!}(x-a)^2 + ...$！@#￥%……&*（"
     },
     "s2": {
       "type": "say",
@@ -22,14 +22,15 @@
       "text": "1919810"
     },
     "s4": {
-      "type": "formula",
-      "latex": "f(x)=x^2+1"
+      "type": "say",
+      "speaker": "?",
+      "text": "但是这里没办法放矩阵。"
     },
     "s5": {
       "type": "say",
       "speaker": "?",
-      "text": "测试"
+      "text": "͞I͟͞ ͟͞a͟͞m͟͞ ͟͞w͟͞a͟͞i͟͞t͟͞i͟͞n͟͞g͟͞ ͟͞f͟͞o͟͞r͟͞ ͟͞y͟͞o͟͞u͟"
     }
   },
-  "flow": ["bg0","s1", "s2", "s3", "s4", "s5"]
+  "flow": ["bg0","s2", "s1", "s3", "s4", "s5"]
 }

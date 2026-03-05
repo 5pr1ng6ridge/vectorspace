@@ -7,7 +7,6 @@ from ..ui.dialogue_text import (
     DialogueSegment,
     count_reveal_units,
     parse_dialogue_segments,
-    slice_dialogue_segments,
 )
 from ..ui.game_view import GameView
 
@@ -87,7 +86,7 @@ class ScriptRunner:
         self.typing = True
         self.waiting_for_click = False
 
-        self.view.show_text_segments([])
+        self.view.show_text_segments(self.current_segments, 0)
 
         self.type_timer.stop()
         if self.current_total_units == 0:
@@ -110,9 +109,7 @@ class ScriptRunner:
             return
 
         self.current_index += 1
-        self.view.show_text_segments(
-            slice_dialogue_segments(self.current_segments, self.current_index)
-        )
+        self.view.show_text_segments(self.current_segments, self.current_index)
 
     def _on_advance_requested(self) -> None:
         if self.typing:

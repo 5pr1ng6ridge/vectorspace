@@ -95,8 +95,10 @@ class GameView(QWidget):
         self.text_label.set_plain_dialogue(text)
         self.text_label.setVisible(True)
 
-    def show_text_segments(self, segments: list[DialogueSegment]) -> None:
-        self.text_label.set_text_segments(segments)
+    def show_text_segments(
+        self, segments: list[DialogueSegment], visible_units: int | None = None
+    ) -> None:
+        self.text_label.set_text_segments(segments, visible_units)
         self.text_label.setVisible(True)
 
     def show_formula(self, pixmap: QPixmap) -> None:
