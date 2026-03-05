@@ -29,12 +29,17 @@
     "s4": {
       "type": "say",
       "speaker": "?",
-      "text": "但是这里没办法放矩阵。"
+      "text": "这里可以放矩阵，但是它不会换行。"
     },
     "s5": {
       "type": "say",
       "speaker": "?",
-      "text": "͞I͟͞ ͟͞a͟͞m͟͞ ͟͞w͟͞a͟͞i͟͞t͟͞i͟͞n͟͞g͟͞ ͟͞f͟͞o͟͞r͟͞ ͟͞y͟͞o͟͞u͟"
+      "text": "by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?"
+    },
+    "s6": {
+      "type": "say",
+      "speaker": "",
+      "text": "by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?"
     }
   },
   "flow": ["bg0","s0","s1", "s2", "s3", "s4", "s5"]

@@ -65,6 +65,25 @@ class GameView(QWidget):
 
         self.name_label.setStyleSheet("color: #FFFFFF; background: transparent;")
 
+    def set_dialogue_style(
+        self,
+        font_size: int | None = None,
+        color: str | None = None,
+        name_font_size: int | None = None,
+        name_color: str | None = None,
+    ) -> None:
+        if name_font_size is not None:
+            current_name_font = QFont(self.name_label.font())
+            current_name_font.setPointSize(max(1, int(name_font_size)))
+            self.name_label.setFont(current_name_font)
+
+        if name_color is not None:
+            self.name_label.setStyleSheet(
+                f"color: {name_color}; background: transparent;"
+            )
+
+        self.text_label.set_text_style(font_size_px=font_size, color_hex=color)
+
     def set_background(self, filename: str) -> None:
         path = asset_path("backgrounds", filename)
         pixmap = QPixmap(str(path))
@@ -101,8 +120,8 @@ class GameView(QWidget):
         self.text_label.set_text_segments(segments, visible_units)
         self.text_label.setVisible(True)
 
-    def show_formula(self, pixmap: QPixmap) -> None:
-        self.text_label.set_formula_pixmap(pixmap)
+    def show_formula(self, expr: str) -> None:
+        self.text_label.set_formula_text(expr)
         self.text_label.setVisible(True)
 
     def resizeEvent(self, event) -> None:

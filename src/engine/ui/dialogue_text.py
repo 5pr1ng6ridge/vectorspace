@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import base64
+import html
+import json
+import re
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QColor, QFont, QImage, QPixmap, QTextCharFormat, QTextCursor, QTextDocument, QTextImageFormat, QTextOption
-from PySide6.QtWidgets import QFrame, QTextBrowser
+import markdown
+from PySide6.QtCore import QBuffer, QIODevice, Qt, QUrl
+from PySide6.QtGui import QColor, QFont, QPixmap
+try:
+    from PySide6.QtWebEngineCore import QWebEngineSettings
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+except ModuleNotFoundError as exc:
+    raise RuntimeError(
+        "QtWebEngine is unavailable. Install dependencies (including pyside6-addons) first."
+    ) from exc
 
-from ..latex.renderer import render_latex_inline
+from ..resources.paths import asset_path
+
+_MARKDOWN_ESCAPE_RE = re.compile(r"([\\`*_{}\[\]()#+\-.!|>])")
+_DIALOGUE_FONT_ASSET = "fonts/fusion-pixel-12px-monospaced-zh_hans.ttf"
 
 
 @dataclass(frozen=True)
@@ -87,140 +101,255 @@ def count_reveal_units(segments: list[DialogueSegment]) -> int:
     return total
 
 
-class DialogueTextView(QTextBrowser):
+def _escape_markdown_text(text: str) -> str:
+    return _MARKDOWN_ESCAPE_RE.sub(r"\\\1", text)
+
+
+def _hidden_text_html(text: str) -> str:
+    return html.escape(text).replace("\n", "<br/>")
+
+
+def _segments_to_markdown(
+    segments: list[DialogueSegment], visible_units: int | None
+) -> str:
+    remaining = visible_units
+    parts: list[str] = []
+
+    for segment in segments:
+        if segment.kind == "formula":
+            formula = f"${segment.content}$"
+            visible = remaining is None or remaining > 0
+            if visible:
+                parts.append(formula)
+            else:
+                parts.append(f'<span class="hidden-math">{formula}</span>')
+
+            if remaining is not None and remaining > 0:
+                remaining -= 1
+            continue
+
+        if remaining is None:
+            parts.append(_escape_markdown_text(segment.content))
+            continue
+
+        if remaining <= 0:
+            parts.append(f'<span class="hidden-text">{_hidden_text_html(segment.content)}</span>')
+            continue
+
+        visible_text = segment.content[:remaining]
+        hidden_text = segment.content[remaining:]
+        if visible_text:
+            parts.append(_escape_markdown_text(visible_text))
+        if hidden_text:
+            parts.append(f'<span class="hidden-text">{_hidden_text_html(hidden_text)}</span>')
+        remaining -= len(visible_text)
+
+    return "".join(parts)
+
+
+def _markdown_to_html(markdown_text: str) -> str:
+    # nl2br keeps dialogue line breaks predictable inside the web container.
+    return markdown.markdown(markdown_text, extensions=["nl2br"])
+
+
+def _escape_css_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> str:
+    fallback_family = _escape_css_string(font_family)
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <style>
+    @font-face {{
+      font-family: "VectspaceDialogue";
+      src: url("{_DIALOGUE_FONT_ASSET}") format("truetype");
+      font-display: block;
+    }}
+    html, body {{
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      overflow: hidden;
+    }}
+    #dialogue-root {{
+      color: {color_hex};
+      font-family: "VectspaceDialogue", "{fallback_family}", sans-serif;
+      font-size: {font_size_px}px;
+      line-height: 1.35;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }}
+    #dialogue-root p {{
+      margin: 0;
+    }}
+    #dialogue-root .hidden-text,
+    #dialogue-root .hidden-math {{
+      opacity: 0;
+    }}
+    #dialogue-root .katex-display {{
+      margin: 0.05em 0;
+      text-align: left;
+    }}
+  </style>
+</head>
+<body>
+  <div id="dialogue-root"></div>
+
+  <script defer src="vendor/katex/katex.min.js"></script>
+  <script defer src="vendor/katex/contrib/auto-render.min.js"></script>
+  <script>
+    window.__applyDialogueHtml = function(payload, attempt) {{
+      const currentAttempt = attempt || 0;
+      const root = document.getElementById("dialogue-root");
+      root.innerHTML = payload;
+      if (!window.renderMathInElement) {{
+        if (currentAttempt < 20) {{
+          setTimeout(function() {{
+            window.__applyDialogueHtml(payload, currentAttempt + 1);
+          }}, 16);
+        }}
+        return;
+      }}
+      window.renderMathInElement(root, {{
+        delimiters: [
+          {{ left: "$$", right: "$$", display: true }},
+          {{ left: "$", right: "$", display: false }}
+        ],
+        throwOnError: false,
+        strict: "ignore"
+      }});
+    }};
+  </script>
+</body>
+</html>
+"""
+
+
+class DialogueTextView(QWebEngineView):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._formula_cache: dict[tuple[str, int, bool], QImage] = {}
-        self._resource_counter = 0
+        self._font_family = "sans-serif"
+        self._font_size_px = 24
+        self._font_color = "#FFFFFF"
+        self._page_ready = False
+        self._pending_html: str | None = None
+        self._current_html = ""
+        self._base_url = self._resolve_assets_base_url()
 
-        self.setFrameShape(QFrame.NoFrame)
-        self.setReadOnly(True)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setTextInteractionFlags(Qt.NoTextInteraction)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.viewport().setAutoFillBackground(False)
-        self.document().setDocumentMargin(0)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.setContextMenuPolicy(Qt.NoContextMenu)
 
-        text_option = QTextOption()
-        text_option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
-        self.document().setDefaultTextOption(text_option)
+        self.page().setBackgroundColor(Qt.transparent)
+        settings = self.settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, False)
+        settings.setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True
+        )
 
-        self._refresh_style()
+        self.loadFinished.connect(self._on_page_loaded)
+        self._reload_shell()
 
     def setFont(self, font: QFont) -> None:
         super().setFont(font)
-        self.document().setDefaultFont(font)
+        self._font_family = font.family() or "sans-serif"
+        self._font_size_px = max(1, int(round(font.pointSizeF())))
+        self._reload_shell()
+
+    def set_text_style(
+        self, font_size_px: int | None = None, color_hex: str | None = None
+    ) -> None:
+        style_changed = False
+
+        if font_size_px is not None:
+            new_font_size = max(1, int(font_size_px))
+            if new_font_size != self._font_size_px:
+                self._font_size_px = new_font_size
+                style_changed = True
+
+        if color_hex is not None:
+            parsed = QColor(color_hex)
+            if parsed.isValid():
+                normalized = parsed.name()
+                if normalized != self._font_color:
+                    self._font_color = normalized
+                    style_changed = True
+
+        if style_changed:
+            self._reload_shell()
 
     def set_text_segments(
         self, segments: list[DialogueSegment], visible_units: int | None = None
     ) -> None:
-        self._render_segments(segments, visible_units)
+        markdown_text = _segments_to_markdown(segments, visible_units)
+        self._set_content_html(_markdown_to_html(markdown_text))
 
     def set_plain_dialogue(self, text: str) -> None:
-        self._render_segments(parse_dialogue_segments(text), None)
+        self.set_text_segments(parse_dialogue_segments(text), None)
+
+    def set_formula_text(self, expr: str) -> None:
+        markdown_text = f"$$\n{expr}\n$$"
+        self._set_content_html(_markdown_to_html(markdown_text))
 
     def set_formula_pixmap(self, pixmap: QPixmap) -> None:
-        document = self.document()
-        document.clear()
-
-        cursor = QTextCursor(document)
-        image_format = QTextImageFormat()
-        image_format.setName(self._register_image(pixmap.toImage()))
-        image_format.setWidth(pixmap.width())
-        image_format.setHeight(pixmap.height())
-        cursor.insertImage(image_format)
-
-    def _render_segments(
-        self, segments: list[DialogueSegment], visible_units: int | None
-    ) -> None:
-        document = self.document()
-        document.clear()
-
-        cursor = QTextCursor(document)
-        visible_text_format = QTextCharFormat()
-        visible_text_format.setFont(self.font())
-        visible_text_format.setForeground(self.textColor())
-        cursor.setCharFormat(visible_text_format)
-
-        hidden_text_format = QTextCharFormat(visible_text_format)
-        hidden_color = QColor(self.textColor())
-        hidden_color.setAlpha(0)
-        hidden_text_format.setForeground(hidden_color)
-
-        inline_font_size = max(16, int(round(self.font().pointSizeF() * 0.45)))
-        remaining = visible_units
-
-        for segment in segments:
-            if segment.kind == "formula":
-                is_visible = remaining is None or remaining > 0
-                image = self._get_formula_image(
-                    segment.content,
-                    inline_font_size,
-                    visible=is_visible,
-                )
-                image_format = QTextImageFormat()
-                image_format.setName(self._register_image(image))
-                image_format.setWidth(image.width())
-                image_format.setHeight(image.height())
-                image_format.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignMiddle)
-                cursor.insertImage(image_format)
-                if remaining is not None and remaining > 0:
-                    remaining -= 1
-                continue
-
-            if remaining is None:
-                cursor.insertText(segment.content, visible_text_format)
-                continue
-
-            if remaining <= 0:
-                cursor.insertText(segment.content, hidden_text_format)
-                continue
-
-            visible_text = segment.content[:remaining]
-            hidden_text = segment.content[remaining:]
-            if visible_text:
-                cursor.insertText(visible_text, visible_text_format)
-            if hidden_text:
-                cursor.insertText(hidden_text, hidden_text_format)
-            remaining -= len(visible_text)
-
-        cursor.clearSelection()
-
-    # 公式图像渲染
-    def _get_formula_image(self, expr: str, font_size: int, visible: bool) -> QImage:
-        cache_key = (expr, font_size, visible)
-        cached = self._formula_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        image = render_latex_inline(expr, font_size=font_size).toImage()
-        if not visible:
-            hidden = QImage(image.size(), QImage.Format_ARGB32_Premultiplied)
-            hidden.fill(Qt.GlobalColor.transparent)
-            image = hidden
-        self._formula_cache[cache_key] = image
-        return image
-
-    def _register_image(self, image: QImage) -> str:
-        resource_name = f"formula://{self._resource_counter}"
-        self._resource_counter += 1
-        self.document().addResource(
-            QTextDocument.ImageResource,
-            QUrl(resource_name),
-            image,
-        )
-        return resource_name
-
-    def _refresh_style(self) -> None:
-        color = self.textColor().name()
-        self.setStyleSheet(
-            "QTextBrowser {"
-            "background: transparent;"
-            "border: none;"
-            f"color: {color};"
-            "}"
+        if pixmap.isNull():
+            self._set_content_html("")
+            return
+        buffer = QBuffer()
+        buffer.open(QIODevice.WriteOnly)
+        pixmap.save(buffer, "PNG")
+        encoded = base64.b64encode(bytes(buffer.data())).decode("ascii")
+        self._set_content_html(
+            "<img alt='formula' "
+            "style='display:block;max-width:100%;height:auto;' "
+            f"src='data:image/png;base64,{encoded}' />"
         )
 
-    def textColor(self) -> QColor:
-        return QColor("#FFFFFF")
+    def _reload_shell(self) -> None:
+        self._page_ready = False
+        self._pending_html = self._current_html
+        shell_html = _build_shell_html(
+            font_family=self._font_family,
+            font_size_px=self._font_size_px,
+            color_hex=self._font_color,
+        )
+        self.setHtml(shell_html, self._base_url)
+
+    def _set_content_html(self, html_content: str) -> None:
+        self._current_html = html_content
+        payload = json.dumps(html_content)
+        script = f"window.__applyDialogueHtml({payload});"
+        if self._page_ready:
+            self.page().runJavaScript(script)
+            return
+        self._pending_html = html_content
+
+    def _on_page_loaded(self, ok: bool) -> None:
+        self._page_ready = ok
+        if not ok:
+            return
+        if self._pending_html is None:
+            return
+        self._set_content_html(self._pending_html)
+
+    def _resolve_assets_base_url(self) -> QUrl:
+        assets_dir = asset_path()
+        katex_dir = assets_dir / "vendor" / "katex"
+        if not katex_dir.exists():
+            raise RuntimeError(
+                f"Local KaTeX assets are missing: {katex_dir}. "
+                "Place katex.min.css/js, contrib/auto-render.min.js and fonts/ under this directory."
+            )
+
+        dialogue_font = assets_dir / _DIALOGUE_FONT_ASSET
+        if not dialogue_font.exists():
+            raise RuntimeError(
+                f"Dialogue font file is missing: {dialogue_font}. "
+                "Place the custom font under game/assets/fonts."
+            )
+
+        return QUrl.fromLocalFile(str(assets_dir) + "/")

@@ -2,12 +2,7 @@ from typing import Any
 
 from PySide6.QtCore import QTimer
 
-from ..latex.renderer import render_latex_block
-from ..ui.dialogue_text import (
-    DialogueSegment,
-    count_reveal_units,
-    parse_dialogue_segments,
-)
+from ..ui.dialogue_text import DialogueSegment, count_reveal_units, parse_dialogue_segments
 from ..ui.game_view import GameView
 
 
@@ -31,6 +26,7 @@ class ScriptRunner:
         self.type_timer.timeout.connect(self._on_typewriter_tick)
 
         self.view.advanceRequested.connect(self._on_advance_requested)
+        self._apply_defaults()
 
     def start(self) -> None:
         self.index = 0
@@ -58,9 +54,9 @@ class ScriptRunner:
             self.view.set_name("")
             expr = node.get("latex", "")
             if not expr:
-                self.view.show_text("(空公式节点)")
+                self.view.show_text("(滚木公式节点)")
             else:
-                self.view.show_formula(render_latex_block(expr))
+                self.view.show_formula(expr)
 
             self.typing = False
             self.waiting_for_click = True
@@ -71,6 +67,18 @@ class ScriptRunner:
             if filename:
                 self.view.set_background(filename)
 
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type == "style":
+            self._apply_style_node(node)
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type == "typing":
+            self._apply_typing_node(node)
             self.index += 1
             self._show_current_node()
             return
@@ -123,3 +131,89 @@ class ScriptRunner:
             self.waiting_for_click = False
             self.index += 1
             self._show_current_node()
+
+    def _apply_defaults(self) -> None:
+        defaults = self.script_data.get("defaults", {})
+        if not isinstance(defaults, dict):
+            return
+
+        style_defaults = defaults.get("style")
+        if isinstance(style_defaults, dict):
+            self._apply_style_node(style_defaults)
+
+        typing_defaults = defaults.get("typing")
+        if isinstance(typing_defaults, dict):
+            self._apply_typing_node(typing_defaults)
+
+    def _apply_style_node(self, node: dict[str, Any]) -> None:
+        font_size = self._read_int(node, "font_size", "text_size")
+        color = self._read_str(node, "color", "text_color")
+        name_font_size = self._read_int(node, "name_font_size", "name_size")
+        name_color = self._read_str(node, "name_color")
+
+        self.view.set_dialogue_style(
+            font_size=font_size,
+            color=color,
+            name_font_size=name_font_size,
+            name_color=name_color,
+        )
+
+    def _apply_typing_node(self, node: dict[str, Any]) -> None:
+        interval_ms = self._read_int(node, "speed_ms", "type_interval_ms", "interval_ms")
+        cps = self._read_float(node, "cps", "chars_per_second")
+
+        if cps is not None and cps > 0:
+            interval_ms = max(1, int(round(1000.0 / cps)))
+
+        if interval_ms is None:
+            return
+
+        self.type_interval_ms = max(1, int(interval_ms))
+        if self.type_timer.isActive():
+            self.type_timer.setInterval(self.type_interval_ms)
+
+    @staticmethod
+    def _read_str(node: dict[str, Any], *keys: str) -> str | None:
+        for key in keys:
+            value = node.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _read_int(node: dict[str, Any], *keys: str) -> int | None:
+        for key in keys:
+            value = node.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float):
+                return int(value)
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not stripped:
+                    continue
+                try:
+                    return int(float(stripped))
+                except ValueError:
+                    continue
+        return None
+
+    @staticmethod
+    def _read_float(node: dict[str, Any], *keys: str) -> float | None:
+        for key in keys:
+            value = node.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not stripped:
+                    continue
+                try:
+                    return float(stripped)
+                except ValueError:
+                    continue
+        return None
