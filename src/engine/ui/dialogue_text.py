@@ -148,7 +148,7 @@ class DialogueTextView(QTextBrowser):
         hidden_color.setAlpha(0)
         hidden_text_format.setForeground(hidden_color)
 
-        inline_font_size = max(16, int(round(self.font().pointSizeF() * 0.4)))
+        inline_font_size = max(16, int(round(self.font().pointSizeF() * 0.45)))
         remaining = visible_units
 
         for segment in segments:
@@ -187,6 +187,7 @@ class DialogueTextView(QTextBrowser):
 
         cursor.clearSelection()
 
+    # 公式图像渲染
     def _get_formula_image(self, expr: str, font_size: int, visible: bool) -> QImage:
         cache_key = (expr, font_size, visible)
         cached = self._formula_cache.get(cache_key)

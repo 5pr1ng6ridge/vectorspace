@@ -21,7 +21,8 @@ def run() -> None:
         families = QFontDatabase.applicationFontFamilies(font_id)
         if families:
             app.setFont(QFont(families[0], 20))
-
+    #def show_fullscreen(self):
+    #    self
     win = GameWindow()
     win.show()
     sys.exit(app.exec())

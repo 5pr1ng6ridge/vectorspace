@@ -7,8 +7,9 @@ import matplotlib.pyplot as plt
 
 from PySide6.QtGui import QImage, QPixmap
 
-#matplotlib.rcParams["mathtext.fontset"] = "stix"          # 比较接近 Times / STIX 那挂
-matplotlib.rcParams["mathtext.fontset"] = "dejavuserif"   # 和 DejaVu Serif 系统 UI 比较搭
+matplotlib.rcParams["mathtext.fontset"] = "stix"          # 比较接近 Times / STIX 那挂
+#matplotlib.rcParams["mathtext.fontset"] = "dejavuserif"   # 和 DejaVu Serif 系统 UI 比较搭
+#matplotlib.rcParams["mathtext.fontset"] = "stixsans"
 
 def _render_latex(expr: str, dpi: int, font_size: int, pad_inches: float, color: str = "white") -> QPixmap:
     fig = plt.figure(figsize=(0.01, 0.01))

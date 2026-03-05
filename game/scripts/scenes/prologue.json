@@ -6,20 +6,25 @@
       "type": "bg",
       "file": "bg_vstest.png"
     },
-    "s1": {
-      "type": "say",
-      "speaker": "?",
-      "text": "ciallo~这是一行测试文本这是一行测试文本 $f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本这是$f(x) = f(a) + f'(a)(x-a) + \\frac{f''(a)}{2!}(x-a)^2 + ...$！@#￥%……&*（"
-    },
-    "s2": {
+    "s0": {
       "type": "say",
       "speaker": "?",
       "text": "114514"
     },
+    "s1": {
+      "type": "say",
+      "speaker": "?",
+      "text": "ciallo~这是一行测试文本这是一行测试文本$f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本！@#￥%……&*（"
+    },
+    "s2": {
+      "type": "say",
+      "speaker": "?",
+      "text": "这是$f(x) = f(a) + f'(a)(x-a) + \\frac{f''(a)}{2!}(x-a)^2$"
+    },
     "s3": {
       "type": "say",
       "speaker": "?",
-      "text": "1919810"
+      "text": "$x^{1919810}$喵"
     },
     "s4": {
       "type": "say",
@@ -32,5 +37,5 @@
       "text": "͞I͟͞ ͟͞a͟͞m͟͞ ͟͞w͟͞a͟͞i͟͞t͟͞i͟͞n͟͞g͟͞ ͟͞f͟͞o͟͞r͟͞ ͟͞y͟͞o͟͞u͟"
     }
   },
-  "flow": ["bg0","s2", "s1", "s3", "s4", "s5"]
+  "flow": ["bg0","s0","s1", "s2", "s3", "s4", "s5"]
 }
