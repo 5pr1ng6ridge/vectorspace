@@ -1,3 +1,13 @@
+"""游戏主视图。
+
+图层顺序:
+1. 背景图层
+2. 角色层（预留）
+3. 对话框 UI 贴图
+4. 姓名框
+5. 对话文本（WebView）
+"""
+
 from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QFont, QFontDatabase, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QLabel, QWidget
@@ -7,6 +17,8 @@ from .dialogue_text import DialogueSegment, DialogueTextView
 
 
 class GameView(QWidget):
+    """承载游戏画面的主 Widget。"""
+
     advanceRequested = Signal()
 
     DESIGN_WIDTH = 1920
@@ -33,6 +45,8 @@ class GameView(QWidget):
 
         self.text_label = DialogueTextView(self)
         self.text_label.setAttribute(Qt.WA_TranslucentBackground)
+        # 点击交给父级处理，保证点击对话区域也能推进流程。
+        self.text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
         self._apply_fonts()
         self._setup_z_order()
@@ -45,6 +59,7 @@ class GameView(QWidget):
         self.text_label.raise_()
 
     def _apply_fonts(self) -> None:
+        """加载像素字体并应用到姓名框/对话框。"""
         font_path = asset_path("fonts", "fusion-pixel-12px-monospaced-zh_hans.ttf")
         font_id = QFontDatabase.addApplicationFont(str(font_path))
         if font_id == -1:
@@ -57,12 +72,8 @@ class GameView(QWidget):
             return
 
         family = families[0]
-        name_font = QFont(family, 40)
-        text_font = QFont(family, 35)
-
-        self.name_label.setFont(name_font)
-        self.text_label.setFont(text_font)
-
+        self.name_label.setFont(QFont(family, 40))
+        self.text_label.setFont(QFont(family, 35))
         self.name_label.setStyleSheet("color: #FFFFFF; background: transparent;")
 
     def set_dialogue_style(
@@ -72,6 +83,7 @@ class GameView(QWidget):
         name_font_size: int | None = None,
         name_color: str | None = None,
     ) -> None:
+        """更新对话与姓名框样式（供 ``style`` 节点调用）。"""
         if name_font_size is not None:
             current_name_font = QFont(self.name_label.font())
             current_name_font.setPointSize(max(1, int(name_font_size)))
@@ -85,6 +97,7 @@ class GameView(QWidget):
         self.text_label.set_text_style(font_size_px=font_size, color_hex=color)
 
     def set_background(self, filename: str) -> None:
+        """切换背景图。"""
         path = asset_path("backgrounds", filename)
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
@@ -128,7 +141,6 @@ class GameView(QWidget):
         super().resizeEvent(event)
 
         self._update_bg_geometry()
-
         self.ui_overlay.setGeometry(self.rect())
         self.ui_overlay.setPixmap(
             self._ui_pixmap.scaled(
@@ -145,6 +157,7 @@ class GameView(QWidget):
         text_rect_design = QRect(140, 874, 1640, 256)
 
         def map_rect(rect: QRect) -> QRect:
+            """按设计分辨率映射到当前窗口尺寸。"""
             x = int(rect.x() * width / self.DESIGN_WIDTH)
             y = int(rect.y() * height / self.DESIGN_HEIGHT)
             mapped_width = int(rect.width() * width / self.DESIGN_WIDTH)

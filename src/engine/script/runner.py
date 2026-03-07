@@ -1,12 +1,28 @@
+"""脚本执行器。
+
+支持节点类型:
+- ``say``: 对话文本（打字机效果 + 支持内联公式/标签）
+- ``formula``: 独立公式块
+- ``bg``: 背景切换（立即生效，不等待点击）
+- ``style``: 动态修改字号/颜色
+- ``typing``: 动态修改打字速度
+"""
+
 from typing import Any
 
 from PySide6.QtCore import QTimer
 
-from ..ui.dialogue_text import DialogueSegment, count_reveal_units, parse_dialogue_segments
+from ..ui.dialogue_text import (
+    DialogueSegment,
+    count_reveal_units,
+    parse_dialogue_segments,
+)
 from ..ui.game_view import GameView
 
 
 class ScriptRunner:
+    """按 ``flow`` 顺序驱动场景节点。"""
+
     def __init__(self, view: GameView, script_data: dict[str, Any]) -> None:
         self.view = view
         self.script_data = script_data
@@ -17,6 +33,7 @@ class ScriptRunner:
         self.waiting_for_click = False
         self.typing = False
 
+        # 打字机状态
         self.current_segments: list[DialogueSegment] = []
         self.current_total_units = 0
         self.current_index = 0
@@ -33,6 +50,7 @@ class ScriptRunner:
         self._show_current_node()
 
     def _show_current_node(self) -> None:
+        """显示当前节点；必要时自动跳转到下一个节点。"""
         if self.index >= len(self.flow):
             self.view.set_name("")
             self.view.show_text("(没有了喵、再点也不会有反应的喵)")
@@ -83,17 +101,18 @@ class ScriptRunner:
             self._show_current_node()
             return
 
+        # 未知节点直接跳过，避免卡死流程。
         self.index += 1
         self._show_current_node()
 
     def _start_typewriter(self, text: str) -> None:
+        """开始一段 ``say`` 文本的逐字显示。"""
         self.current_segments = parse_dialogue_segments(text)
         self.current_total_units = count_reveal_units(self.current_segments)
         self.current_index = 0
 
         self.typing = True
         self.waiting_for_click = False
-
         self.view.show_text_segments(self.current_segments, 0)
 
         self.type_timer.stop()
@@ -120,6 +139,10 @@ class ScriptRunner:
         self.view.show_text_segments(self.current_segments, self.current_index)
 
     def _on_advance_requested(self) -> None:
+        """点击推进:
+        1. 正在打字 -> 直接补全本句
+        2. 已显示完成 -> 前进到下一个节点
+        """
         if self.typing:
             self.type_timer.stop()
             self.typing = False
@@ -133,6 +156,7 @@ class ScriptRunner:
             self._show_current_node()
 
     def _apply_defaults(self) -> None:
+        """应用场景级默认配置 ``defaults``。"""
         defaults = self.script_data.get("defaults", {})
         if not isinstance(defaults, dict):
             return
@@ -146,6 +170,14 @@ class ScriptRunner:
             self._apply_typing_node(typing_defaults)
 
     def _apply_style_node(self, node: dict[str, Any]) -> None:
+        """应用样式节点。
+
+        支持字段:
+        - ``font_size`` / ``text_size``
+        - ``color`` / ``text_color``
+        - ``name_font_size`` / ``name_size``
+        - ``name_color``
+        """
         font_size = self._read_int(node, "font_size", "text_size")
         color = self._read_str(node, "color", "text_color")
         name_font_size = self._read_int(node, "name_font_size", "name_size")
@@ -159,7 +191,15 @@ class ScriptRunner:
         )
 
     def _apply_typing_node(self, node: dict[str, Any]) -> None:
-        interval_ms = self._read_int(node, "speed_ms", "type_interval_ms", "interval_ms")
+        """应用打字速度节点。
+
+        支持字段:
+        - ``speed_ms`` / ``type_interval_ms`` / ``interval_ms``
+        - ``cps`` / ``chars_per_second``（优先转换为 ms）
+        """
+        interval_ms = self._read_int(
+            node, "speed_ms", "type_interval_ms", "interval_ms"
+        )
         cps = self._read_float(node, "cps", "chars_per_second")
 
         if cps is not None and cps > 0:

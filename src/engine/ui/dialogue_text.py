@@ -1,3 +1,11 @@
+"""对话文本渲染组件（Web 方案）。
+
+设计目标:
+1. 文本主体走 QWebEngineView，支持 KaTeX 与 CSS 动画。
+2. 逐字机与布局稳定并存：未显示内容透明占位，不触发行重排。
+3. 对外接口保持简单：``set_text_segments`` / ``set_formula_text``。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,7 +16,7 @@ import re
 
 import markdown
 from PySide6.QtCore import QBuffer, QIODevice, Qt, QUrl
-from PySide6.QtGui import QColor, QFont, QPixmap
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPixmap
 try:
     from PySide6.QtWebEngineCore import QWebEngineSettings
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -21,10 +29,30 @@ from ..resources.paths import asset_path
 
 _MARKDOWN_ESCAPE_RE = re.compile(r"([\\`*_{}\[\]()#+\-.!|>])")
 _DIALOGUE_FONT_ASSET = "fonts/fusion-pixel-12px-monospaced-zh_hans.ttf"
+# 仅解析并放行有限标签，避免脚本直接注入任意 HTML。
+_HTML_TAG_RE = re.compile(r"<\s*(/)?\s*([a-zA-Z][a-zA-Z0-9-]*)\s*([^<>]*?)\s*(/?)\s*>")
+_HTML_ATTR_RE = re.compile(
+    r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')'
+)
+_ALLOWED_SIMPLE_TAGS = {"b", "i", "u", "em", "strong", "small", "sup", "sub"}
+_FX_TAG_CLASS_MAP = {
+    "shake": "fx-shake",
+    "wave": "fx-wave",
+    "pulse": "fx-pulse",
+    "glow": "fx-glow",
+    "rainbow": "fx-rainbow",
+}
 
 
 @dataclass(frozen=True)
 class DialogueSegment:
+    """对话片段。
+
+    kind:
+    - ``text``: 普通文本
+    - ``formula``: ``$...$`` 公式
+    - ``html``: 受控 HTML 标签
+    """
     kind: str
     content: str
 
@@ -41,7 +69,130 @@ def _append_text_segment(segments: list[DialogueSegment], content: str) -> None:
     segments.append(DialogueSegment("text", content))
 
 
+def _parse_span_attrs(attrs_text: str) -> str | None:
+    """解析并过滤 ``<span ...>`` 属性。
+
+    安全策略:
+    - 仅允许 ``class=...``
+    - class 值仅允许字母、数字、下划线、连字符与空格
+    """
+    attrs_text = attrs_text.strip()
+    if not attrs_text:
+        return ""
+
+    normalized_parts: list[str] = []
+    index = 0
+    while index < len(attrs_text):
+        while index < len(attrs_text) and attrs_text[index].isspace():
+            index += 1
+        if index >= len(attrs_text):
+            break
+
+        match = _HTML_ATTR_RE.match(attrs_text, index)
+        if match is None:
+            return None
+
+        attr_name = match.group(1).lower()
+        attr_value_raw = match.group(2) if match.group(2) is not None else match.group(3)
+        attr_value = " ".join(attr_value_raw.split())
+
+        if attr_name != "class":
+            return None
+
+        if not re.fullmatch(r"[a-zA-Z0-9_\- ]{1,128}", attr_value):
+            return None
+
+        normalized_parts.append(f'class="{html.escape(attr_value, quote=True)}"')
+        index = match.end()
+
+    return " ".join(normalized_parts)
+
+
+def _sanitize_html_tag(candidate: str) -> str | None:
+    """将候选标签规范化为可安全插入的 HTML。
+
+    返回 ``None`` 表示标签不被允许，会按普通文本处理。
+    """
+    match = _HTML_TAG_RE.fullmatch(candidate)
+    if match is None:
+        return None
+
+    is_closing = bool(match.group(1))
+    tag_name = match.group(2).lower()
+    attrs_text = match.group(3) or ""
+    is_self_closing = bool(match.group(4))
+
+    if is_closing:
+        if attrs_text.strip() or is_self_closing:
+            return None
+        if tag_name in _FX_TAG_CLASS_MAP:
+            return "</span>"
+        if tag_name in _ALLOWED_SIMPLE_TAGS or tag_name == "span":
+            return f"</{tag_name}>"
+        return None
+
+    if tag_name in _FX_TAG_CLASS_MAP:
+        if attrs_text.strip() or is_self_closing:
+            return None
+        fx_class = _FX_TAG_CLASS_MAP[tag_name]
+        return f'<span class="{fx_class}">'
+
+    if tag_name == "br":
+        if attrs_text.strip():
+            return None
+        return "<br/>"
+
+    if tag_name == "span":
+        if is_self_closing:
+            return None
+        attrs = _parse_span_attrs(attrs_text)
+        if attrs is None:
+            return None
+        if attrs:
+            return f"<span {attrs}>"
+        return "<span>"
+
+    if tag_name in _ALLOWED_SIMPLE_TAGS:
+        if attrs_text.strip() or is_self_closing:
+            return None
+        return f"<{tag_name}>"
+
+    return None
+
+
+def _extract_supported_html_tag(text: str, start_index: int) -> tuple[str | None, int]:
+    """从文本中提取受支持标签。
+
+    返回:
+    - (sanitized_tag, next_index): 成功
+    - (None, start_index): 失败
+    """
+    closing_index = text.find(">", start_index + 1)
+    if closing_index == -1:
+        return None, start_index
+
+    if closing_index - start_index > 256:
+        return None, start_index
+
+    candidate = text[start_index : closing_index + 1]
+    if "\n" in candidate or "\r" in candidate:
+        return None, start_index
+
+    sanitized = _sanitize_html_tag(candidate)
+    if sanitized is None:
+        return None, start_index
+
+    return sanitized, closing_index + 1
+
+
 def parse_dialogue_segments(text: str) -> list[DialogueSegment]:
+    """将对话文本解析为片段序列。
+
+    解析规则:
+    - ``$...$`` -> formula
+    - 受支持的 ``<tag>`` -> html
+    - 其余内容 -> text
+    """
     segments: list[DialogueSegment] = []
     text_buffer: list[str] = []
     formula_buffer: list[str] = []
@@ -79,6 +230,15 @@ def parse_dialogue_segments(text: str) -> list[DialogueSegment]:
             index += 1
             continue
 
+        if not in_formula and char == "<":
+            html_tag, next_index = _extract_supported_html_tag(text, index)
+            if html_tag is not None:
+                _append_text_segment(segments, "".join(text_buffer))
+                text_buffer.clear()
+                segments.append(DialogueSegment("html", html_tag))
+                index = next_index
+                continue
+
         target = formula_buffer if in_formula else text_buffer
         target.append(char)
         index += 1
@@ -92,10 +252,19 @@ def parse_dialogue_segments(text: str) -> list[DialogueSegment]:
 
 
 def count_reveal_units(segments: list[DialogueSegment]) -> int:
+    """统计逐字机推进单位数。
+
+    约定:
+    - 文本按字符计数
+    - 公式按 1 个单位计数
+    - HTML 标签计 0（不会打断标签）
+    """
     total = 0
     for segment in segments:
         if segment.kind == "formula":
             total += 1
+        elif segment.kind == "html":
+            total += 0
         else:
             total += len(segment.content)
     return total
@@ -112,10 +281,20 @@ def _hidden_text_html(text: str) -> str:
 def _segments_to_markdown(
     segments: list[DialogueSegment], visible_units: int | None
 ) -> str:
+    """将片段拼装为 Markdown/HTML 混合文本。
+
+    注意:
+    - 未显示文本/公式使用 hidden-* class 占位，保持布局稳定。
+    - HTML 标签总是原样输出（受上游白名单保护）。
+    """
     remaining = visible_units
     parts: list[str] = []
 
     for segment in segments:
+        if segment.kind == "html":
+            parts.append(segment.content)
+            continue
+
         if segment.kind == "formula":
             formula = f"${segment.content}$"
             visible = remaining is None or remaining > 0
@@ -157,6 +336,7 @@ def _escape_css_string(value: str) -> str:
 
 
 def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> str:
+    """构建 WebView 的完整 HTML 壳页面。"""
     fallback_family = _escape_css_string(font_family)
     return f"""<!doctype html>
 <html>
@@ -168,6 +348,9 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
       font-family: "VectspaceDialogue";
       src: url("{_DIALOGUE_FONT_ASSET}") format("truetype");
       font-display: block;
+    }}
+    .katex {{
+      font-size: 1.05em;
     }}
     html, body {{
       margin: 0;
@@ -182,6 +365,9 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
       line-height: 1.35;
       word-break: break-word;
       white-space: pre-wrap;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
     }}
     #dialogue-root p {{
       margin: 0;
@@ -193,6 +379,54 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
     #dialogue-root .katex-display {{
       margin: 0.05em 0;
       text-align: left;
+    }}
+    #dialogue-root .fx-shake,
+    #dialogue-root .fx-wave,
+    #dialogue-root .fx-pulse,
+    #dialogue-root .fx-glow,
+    #dialogue-root .fx-rainbow {{
+      display: inline-block;
+      will-change: transform, opacity, filter, text-shadow;
+    }}
+    #dialogue-root .fx-shake {{
+      animation: fx-shake 0.18s linear infinite;
+    }}
+    #dialogue-root .fx-wave {{
+      animation: fx-wave 0.9s ease-in-out infinite;
+    }}
+    #dialogue-root .fx-pulse {{
+      animation: fx-pulse 1.0s ease-in-out infinite;
+      transform-origin: center;
+    }}
+    #dialogue-root .fx-glow {{
+      animation: fx-glow 1.1s ease-in-out infinite;
+    }}
+    #dialogue-root .fx-rainbow {{
+      animation: fx-rainbow 1.6s linear infinite;
+    }}
+    @keyframes fx-shake {{
+      0%   {{ transform: translateX(0); }}
+      25%  {{ transform: translateX(-1px); }}
+      50%  {{ transform: translateX(1px); }}
+      75%  {{ transform: translateX(-1px); }}
+      100% {{ transform: translateX(0); }}
+    }}
+    @keyframes fx-wave {{
+      0%   {{ transform: translateY(0); }}
+      50%  {{ transform: translateY(-0.12em); }}
+      100% {{ transform: translateY(0); }}
+    }}
+    @keyframes fx-pulse {{
+      0%, 100% {{ transform: scale(1.0); opacity: 1; }}
+      50%      {{ transform: scale(1.06); opacity: 0.9; }}
+    }}
+    @keyframes fx-glow {{
+      0%, 100% {{ text-shadow: 0 0 0.0em rgba(255,255,255,0.0); }}
+      50%      {{ text-shadow: 0 0 0.32em rgba(255,255,255,0.85); }}
+    }}
+    @keyframes fx-rainbow {{
+      0%   {{ filter: hue-rotate(0deg); }}
+      100% {{ filter: hue-rotate(360deg); }}
     }}
   </style>
 </head>
@@ -223,6 +457,22 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
         strict: "ignore"
       }});
     }};
+
+    document.addEventListener("copy", function(event) {{
+      event.preventDefault();
+    }});
+    document.addEventListener("cut", function(event) {{
+      event.preventDefault();
+    }});
+    document.addEventListener("selectstart", function(event) {{
+      event.preventDefault();
+    }});
+    document.addEventListener("dragstart", function(event) {{
+      event.preventDefault();
+    }});
+    document.addEventListener("contextmenu", function(event) {{
+      event.preventDefault();
+    }});
   </script>
 </body>
 </html>
@@ -230,6 +480,12 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
 
 
 class DialogueTextView(QWebEngineView):
+    """对话 Web 控件。
+
+    协作约定:
+    - 渲染入口优先用 ``set_text_segments``。
+    - 样式调整走 ``set_text_style``，内部会保留当前内容并热更新页面。
+    """
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._font_family = "sans-serif"
@@ -243,6 +499,7 @@ class DialogueTextView(QWebEngineView):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent; border: none;")
         self.setContextMenuPolicy(Qt.NoContextMenu)
+        self.setFocusPolicy(Qt.NoFocus) 
 
         self.page().setBackgroundColor(Qt.transparent)
         settings = self.settings()
@@ -263,6 +520,7 @@ class DialogueTextView(QWebEngineView):
     def set_text_style(
         self, font_size_px: int | None = None, color_hex: str | None = None
     ) -> None:
+        """动态更新字号与颜色。"""
         style_changed = False
 
         if font_size_px is not None:
@@ -285,13 +543,16 @@ class DialogueTextView(QWebEngineView):
     def set_text_segments(
         self, segments: list[DialogueSegment], visible_units: int | None = None
     ) -> None:
+        """按分段渲染对话（用于打字机）。"""
         markdown_text = _segments_to_markdown(segments, visible_units)
         self._set_content_html(_markdown_to_html(markdown_text))
 
     def set_plain_dialogue(self, text: str) -> None:
+        """直接渲染完整纯文本（内部仍支持公式/标签解析）。"""
         self.set_text_segments(parse_dialogue_segments(text), None)
 
     def set_formula_text(self, expr: str) -> None:
+        """渲染独立公式块。"""
         markdown_text = f"$$\n{expr}\n$$"
         self._set_content_html(_markdown_to_html(markdown_text))
 
@@ -310,6 +571,7 @@ class DialogueTextView(QWebEngineView):
         )
 
     def _reload_shell(self) -> None:
+        # 重载页面前保留当前内容，避免样式更新时出现闪空。
         self._page_ready = False
         self._pending_html = self._current_html
         shell_html = _build_shell_html(
@@ -337,6 +599,7 @@ class DialogueTextView(QWebEngineView):
         self._set_content_html(self._pending_html)
 
     def _resolve_assets_base_url(self) -> QUrl:
+        """校验本地资源并返回 ``assets/`` 的 baseUrl。"""
         assets_dir = asset_path()
         katex_dir = assets_dir / "vendor" / "katex"
         if not katex_dir.exists():
@@ -353,3 +616,17 @@ class DialogueTextView(QWebEngineView):
             )
 
         return QUrl.fromLocalFile(str(assets_dir) + "/")
+
+    def keyPressEvent(self, event) -> None:
+        if event.matches(QKeySequence.Copy):
+            event.accept()
+            return
+
+        if event.modifiers() & Qt.ControlModifier and event.key() in (
+            Qt.Key_C,
+            Qt.Key_Insert,
+        ):
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
