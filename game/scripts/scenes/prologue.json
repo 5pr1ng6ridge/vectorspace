@@ -1,8 +1,8 @@
 {
   "id": "prologue",
   "defaults": {
-    "style": { "font_size": 43, "color": "#FFFFFF" },
-    "typing": { "speed_ms": 30 }
+    "style": { "name_font_size": 27,"font_size": 33, "color": "#F5A9B8", "name_color": "#FFFFFF" },
+    "typing": { "speed_ms": 15 }
   },
   "start": "bg0",
   "nodes": {
@@ -12,25 +12,32 @@
     },
     "s0": {
       "type": "say",
-      "speaker": "?",
-      "text": "<wave>114514</wave>"
+      "speaker": "ヨミビトシラズ",
+      "text": "在不计其数的<span style=\"color: white;\">archive</span>之上  在半径25cm的窗户上  注视着你  想要保持着无名无他，既无起始也无终结的距离感啊 <i><span class=\"fx-epsilon\">掃いて捨てるほどの記録の上  半径25cmの窓で  きみを見ている  まだ名前も何もない始まりも終わりもない距離感でいたい</span></i>"
+    },
+    "st0": {
+      "type": "style",
+      "font_size": 43,
+      "color": "#F5A9B8",
+      "name_font_size": 40,
+      "name_color": "#FFFFFF"
     },
     "s1": {
       "type": "say",
       "speaker": "?",
-      "text": "ciallo~这是一行测试文本这是一行测试文本$f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本！@#￥%……&*（"
+      "text": "ciallo~<shake><rainbow>这是一行测试文本这是一行测试文本</rainbow></shake>$f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本！@#￥%……&*（"
     },    
     "st1": {
       "type": "style",
-      "font_size": 53,
-      "color": "#FF0000",
+      "font_size": 43,
+      "color": "#F5A9B8",
       "name_font_size": 40,
-      "name_color": "#8BE9FD"
+      "name_color": "#FFFFFF"
     },
     "s2": {
       "type": "say",
       "speaker": "?",
-      "text": "这是$f(x) = f(a) + f'(a)(x-a) + \\frac{f''(a)}{2!}(x-a)^2$"
+      "text": "这是$f(x) = f(a) + f'(a)(x-a) + \\frac{f''(a)}{2!}(x-a)^2...$"
     },
     "st2": {
       "type": "style",
@@ -60,7 +67,7 @@
     },
     "st3": {
       "type": "style",
-      "font_size": 23,
+      "font_size": 27,
       "color": "#FF0000",
       "name_font_size": 40,
       "name_color": "#FF0000"
@@ -68,8 +75,8 @@
     "s6": {
       "type": "say",
       "speaker": "",
-      "text": "by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?"
+      "text": "感觉自己Δ很严重怎么办我感觉我自己是一个Δ很严重的人，因为a+b比较破碎吧，身边也没有什么正交的基底，所以感觉自己在解空间里就像一片奇异矩阵，所以当身边出现了新的向量时，可能对方的很多线性变换仅仅只是出于单位正交化，但是我就会有“这个特征值好大”“这个基向量好稳定”的这种想法，然后情不自禁地开始用克莱姆法则展开投影。不过我倒也没有网上说的“在梯度下降时爱上步长，在积分时爱上原函数，在解方程时爱上通解”那么离谱，我一般只会对对称矩阵有这种感觉。我确认这种运算不是收敛，仅仅只是因为我在过往的迭代中太过缺乏正定条件。而且，只要后续和这个向量不再有内积或张成空间，我的这种发散就会消失，恢复成对角阵。之前认不清自己的Δ属性时，就轻易地构造了一个非满秩的增广矩阵，最终被高斯消元法草草归零。自从我认清自己后，我一直用拉格朗日乘数法强行约束，避免因为Δ再莫名其妙地引入噪声项，因为那样会导致误差平方和不收敛。所以我只能在希尔伯特空间里尽量避免和欧氏范数兼容的基向量接触。最近我实习被分配到了一个非零解的方程组里，我们经常一起进行雅可比迭代。不知道为什么，我的Δ又开始震荡了。我觉得还是跟a+b"
     }
   },
-  "flow": ["bg0","s0","s1","st1", "s2", "s3", "s4", "s5","tp1","st3","s6"]
+  "flow": ["bg0","s0","st0","s1","st1", "s2", "s3", "s4", "s5","tp1","st3","s6"]
 }

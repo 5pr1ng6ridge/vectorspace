@@ -163,3 +163,11 @@
 ```powershell
 python -m py_compile src/engine/**/*.py
 ```
+
+## 7. 开发阶段标签放行
+
+- `DialogueText` 解析 `<tag>` 时，默认在开发环境（未打包）放行全部标签。
+- 打包环境默认仍使用安全白名单。
+- 可通过环境变量覆盖：
+  - `VECTSPACE_ALLOW_ALL_HTML_TAGS=1`：无条件放行全部标签
+  - `VECTSPACE_FORCE_SAFE_HTML_TAGS=1`：无条件启用白名单

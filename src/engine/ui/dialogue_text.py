@@ -12,7 +12,9 @@ from dataclasses import dataclass
 import base64
 import html
 import json
+import os
 import re
+import sys
 
 import markdown
 from PySide6.QtCore import QBuffer, QIODevice, Qt, QUrl
@@ -41,7 +43,31 @@ _FX_TAG_CLASS_MAP = {
     "pulse": "fx-pulse",
     "glow": "fx-glow",
     "rainbow": "fx-rainbow",
+    "epsilon": "fx-epsilon",
+    "delta": "fx-delta"
 }
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _is_truthy_env(name: str) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return False
+    return value.strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _allow_unsafe_html_tags_by_default() -> bool:
+    """开发阶段默认放行所有 HTML 标签。
+
+    覆盖方式:
+    - `VECTSPACE_ALLOW_ALL_HTML_TAGS=1`: 强制放行
+    - `VECTSPACE_FORCE_SAFE_HTML_TAGS=1`: 强制白名单
+    """
+    if _is_truthy_env("VECTSPACE_ALLOW_ALL_HTML_TAGS"):
+        return True
+    if _is_truthy_env("VECTSPACE_FORCE_SAFE_HTML_TAGS"):
+        return False
+    return getattr(sys, "_MEIPASS", None) is None
 
 
 @dataclass(frozen=True)
@@ -160,7 +186,9 @@ def _sanitize_html_tag(candidate: str) -> str | None:
     return None
 
 
-def _extract_supported_html_tag(text: str, start_index: int) -> tuple[str | None, int]:
+def _extract_supported_html_tag(
+    text: str, start_index: int, allow_unsafe_html_tags: bool
+) -> tuple[str | None, int]:
     """从文本中提取受支持标签。
 
     返回:
@@ -178,6 +206,13 @@ def _extract_supported_html_tag(text: str, start_index: int) -> tuple[str | None
     if "\n" in candidate or "\r" in candidate:
         return None, start_index
 
+    if allow_unsafe_html_tags:
+        # 开发阶段全放行时，仍优先保留内建标签规范化/简写映射（如 <rainbow> -> <span class="fx-rainbow">）。
+        sanitized = _sanitize_html_tag(candidate)
+        if sanitized is not None:
+            return sanitized, closing_index + 1
+        return candidate, closing_index + 1
+
     sanitized = _sanitize_html_tag(candidate)
     if sanitized is None:
         return None, start_index
@@ -185,7 +220,9 @@ def _extract_supported_html_tag(text: str, start_index: int) -> tuple[str | None
     return sanitized, closing_index + 1
 
 
-def parse_dialogue_segments(text: str) -> list[DialogueSegment]:
+def parse_dialogue_segments(
+    text: str, allow_unsafe_html_tags: bool | None = None
+) -> list[DialogueSegment]:
     """将对话文本解析为片段序列。
 
     解析规则:
@@ -193,6 +230,12 @@ def parse_dialogue_segments(text: str) -> list[DialogueSegment]:
     - 受支持的 ``<tag>`` -> html
     - 其余内容 -> text
     """
+    allow_all_html = (
+        _allow_unsafe_html_tags_by_default()
+        if allow_unsafe_html_tags is None
+        else allow_unsafe_html_tags
+    )
+
     segments: list[DialogueSegment] = []
     text_buffer: list[str] = []
     formula_buffer: list[str] = []
@@ -231,7 +274,9 @@ def parse_dialogue_segments(text: str) -> list[DialogueSegment]:
             continue
 
         if not in_formula and char == "<":
-            html_tag, next_index = _extract_supported_html_tag(text, index)
+            html_tag, next_index = _extract_supported_html_tag(
+                text, index, allow_all_html
+            )
             if html_tag is not None:
                 _append_text_segment(segments, "".join(text_buffer))
                 text_buffer.clear()
@@ -384,9 +429,11 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
     #dialogue-root .fx-wave,
     #dialogue-root .fx-pulse,
     #dialogue-root .fx-glow,
+    #dialogue-root .fx-delta,
+    #dialogue-root .fx-epsilon,
     #dialogue-root .fx-rainbow {{
       display: inline-block;
-      will-change: transform, opacity, filter, text-shadow;
+      will-change: transform, opacity, filter, text-shadow, color;
     }}
     #dialogue-root .fx-shake {{
       animation: fx-shake 0.18s linear infinite;
@@ -403,13 +450,28 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
     }}
     #dialogue-root .fx-rainbow {{
       animation: fx-rainbow 1.6s linear infinite;
+      color: #ff4d4d;
+      -webkit-text-fill-color: currentColor;
+    }}
+    #dialogue-root .fx-rainbow * {{
+      color: inherit !important;
+      -webkit-text-fill-color: inherit !important;
+    }}
+    #dialogue-root .fx-epsilon {{
+      animation: fx-epsilon 0.5s linear infinite;
+      color: #5BCEFA;
+      -webkit-text-fill-color: currentColor;
+    }},
+    #dialogue-root .fx-epsilon * {{
+      color: inherit !important;
+      -webkit-text-fill-color: inherit !important;
     }}
     @keyframes fx-shake {{
-      0%   {{ transform: translateX(0); }}
-      25%  {{ transform: translateX(-1px); }}
-      50%  {{ transform: translateX(1px); }}
-      75%  {{ transform: translateX(-1px); }}
-      100% {{ transform: translateX(0); }}
+      0%   {{ transform: translateY(0); }}
+      25%  {{ transform: translateY(-1px); }}
+      50%  {{ transform: translateY(1px); }}
+      75%  {{ transform: translateY(-1px); }}
+      100% {{ transform: translateY(0); }}
     }}
     @keyframes fx-wave {{
       0%   {{ transform: translateY(0); }}
@@ -425,8 +487,17 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
       50%      {{ text-shadow: 0 0 0.32em rgba(255,255,255,0.85); }}
     }}
     @keyframes fx-rainbow {{
-      0%   {{ filter: hue-rotate(0deg); }}
-      100% {{ filter: hue-rotate(360deg); }}
+      0%   {{ color: #ff4d4d; -webkit-text-fill-color: #ff4d4d; }}
+      17%  {{ color: #ff9f40; -webkit-text-fill-color: #ff9f40; }}
+      34%  {{ color: #ffe14d; -webkit-text-fill-color: #ffe14d; }}
+      50%  {{ color: #56f27f; -webkit-text-fill-color: #56f27f; }}
+      67%  {{ color: #5ab0ff; -webkit-text-fill-color: #5ab0ff; }}
+      84%  {{ color: #b57dff; -webkit-text-fill-color: #b57dff; }}
+      100% {{ color: #ff4d4d; -webkit-text-fill-color: #ff4d4d; }}
+    }}
+    @keyframes fx-epsilon {{
+      0%   {{ color: #5BCEFA; -webkit-text-fill-color: #5BCEFA; }}
+      100% {{ color: #5BCEFA; -webkit-text-fill-color: #5BCEFA; }}
     }}
   </style>
 </head>
@@ -436,6 +507,29 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
   <script defer src="vendor/katex/katex.min.js"></script>
   <script defer src="vendor/katex/contrib/auto-render.min.js"></script>
   <script>
+    window.__animSessionId = null;
+    window.__animStartMs = null;
+
+    function __syncAnimationTimeline(root) {{
+      const sessionElem = root.querySelector("[data-anim-session]");
+      const sessionId = sessionElem ? sessionElem.getAttribute("data-anim-session") : null;
+      if (sessionId !== null && window.__animSessionId !== sessionId) {{
+        window.__animSessionId = sessionId;
+        window.__animStartMs = Date.now();
+      }}
+      if (window.__animStartMs === null) {{
+        window.__animStartMs = Date.now();
+      }}
+
+      const elapsedSec = (Date.now() - window.__animStartMs) / 1000.0;
+      const fxNodes = root.querySelectorAll(
+        ".fx-shake, .fx-wave, .fx-pulse, .fx-glow, .fx-rainbow"
+      );
+      fxNodes.forEach(function(node) {{
+        node.style.animationDelay = "-" + elapsedSec + "s";
+      }});
+    }}
+
     window.__applyDialogueHtml = function(payload, attempt) {{
       const currentAttempt = attempt || 0;
       const root = document.getElementById("dialogue-root");
@@ -456,6 +550,7 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
         throwOnError: false,
         strict: "ignore"
       }});
+      __syncAnimationTimeline(root);
     }};
 
     document.addEventListener("copy", function(event) {{
@@ -494,6 +589,7 @@ class DialogueTextView(QWebEngineView):
         self._page_ready = False
         self._pending_html: str | None = None
         self._current_html = ""
+        self._anim_session_id = 0
         self._base_url = self._resolve_assets_base_url()
 
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -544,17 +640,24 @@ class DialogueTextView(QWebEngineView):
         self, segments: list[DialogueSegment], visible_units: int | None = None
     ) -> None:
         """按分段渲染对话（用于打字机）。"""
+        if visible_units == 0:
+            self._anim_session_id += 1
+
         markdown_text = _segments_to_markdown(segments, visible_units)
-        self._set_content_html(_markdown_to_html(markdown_text))
+        content_html = _markdown_to_html(markdown_text)
+        self._set_content_html(self._wrap_with_anim_session(content_html))
 
     def set_plain_dialogue(self, text: str) -> None:
         """直接渲染完整纯文本（内部仍支持公式/标签解析）。"""
+        self._anim_session_id += 1
         self.set_text_segments(parse_dialogue_segments(text), None)
 
     def set_formula_text(self, expr: str) -> None:
         """渲染独立公式块。"""
+        self._anim_session_id += 1
         markdown_text = f"$$\n{expr}\n$$"
-        self._set_content_html(_markdown_to_html(markdown_text))
+        content_html = _markdown_to_html(markdown_text)
+        self._set_content_html(self._wrap_with_anim_session(content_html))
 
     def set_formula_pixmap(self, pixmap: QPixmap) -> None:
         if pixmap.isNull():
@@ -597,6 +700,13 @@ class DialogueTextView(QWebEngineView):
         if self._pending_html is None:
             return
         self._set_content_html(self._pending_html)
+
+    def _wrap_with_anim_session(self, html_content: str) -> str:
+        return (
+            f'<div data-anim-session="{self._anim_session_id}">'
+            f"{html_content}"
+            "</div>"
+        )
 
     def _resolve_assets_base_url(self) -> QUrl:
         """校验本地资源并返回 ``assets/`` 的 baseUrl。"""
