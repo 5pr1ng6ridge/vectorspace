@@ -13,7 +13,7 @@
     "s0": {
       "type": "say",
       "speaker": "ヨミビトシラズ",
-      "text": "在不计其数的<span style=\"color: white;\">archive</span>之上  在半径25cm的窗户上  注视着你  想要保持着无名无他，既无起始也无终结的距离感啊 <i><span class=\"fx-epsilon\">掃いて捨てるほどの記録の上  半径25cmの窓で  きみを見ている  まだ名前も何もない始まりも終わりもない距離感でいたい</span></i>"
+      "text": "在不计其数的<span style=\"color: white;\"><i>archive</i></span>之上  在半径25cm的窗户上  注视着你 <pause ms=\"500\"/><h1 style=\"font-size:27px;\"><i><epsilon>掃いて捨てるほどの記録の上  半径25cmの窓で  きみを見ている  </epsilon></i></h1>"
     },
     "st0": {
       "type": "style",
@@ -37,7 +37,7 @@
     "s2": {
       "type": "say",
       "speaker": "?",
-      "text": "这是$f(x) = f(a) + f'(a)(x-a) + \\frac{f''(a)}{2!}(x-a)^2...$"
+      "text": "这是<epsilon>$f(x) = f(a) + f'(a)(x-a) + \\frac{f''(a)}{2!}(x-a)^2...$</epsilon>"
     },
     "st2": {
       "type": "style",

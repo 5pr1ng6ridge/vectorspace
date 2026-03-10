@@ -171,3 +171,45 @@ python -m py_compile src/engine/**/*.py
 - 可通过环境变量覆盖：
   - `VECTSPACE_ALLOW_ALL_HTML_TAGS=1`：无条件放行全部标签
   - `VECTSPACE_FORCE_SAFE_HTML_TAGS=1`：无条件启用白名单
+
+## 8. 打字停顿（pause）
+
+- 在 `say.text` 中可以插入 `<pause .../>`，用于让打字机在该位置停顿一段时间。
+- 停顿标签不会渲染到对话文本，也不会占用字符 reveal 进度。
+- 点击左键时，如果当前句还有后续停顿点，会直接跳到“同一句的下一个停顿点”；如果没有后续停顿，则直接补全本句。
+
+示例：
+
+```json
+{
+  "type": "say",
+  "speaker": "?",
+  "text": "第一段<pause ms=\"800\"/>第二段<pause 1.2s/>第三段"
+}
+```
+
+支持时长写法：
+
+- `<pause/>`：默认 `500ms`
+- `<pause ms=\"750\"/>`
+- `<pause s=\"1.5\"/>`
+- `<pause 1.2s/>`（无键名时按秒解析）
+
+## 9. 行内改打字速度（speed）
+- 在 `say.text` 中可插入 `<speed .../>`，用于从该位置开始修改后续打字速度。
+- `speed` 标签不渲染到文本，也不占用 reveal 单位。
+
+示例：
+```json
+{
+  "type": "say",
+  "speaker": "?",
+  "text": "正常速度 <speed ms=\"18\"/>加速段 <speed cps=\"20\"/>恢复较慢段"
+}
+```
+
+支持写法：
+- `<speed ms=\"20\"/>`
+- `<speed cps=\"40\"/>`
+- `<speed 16ms/>`
+- `<speed 30/>`（无单位时按 `ms`）

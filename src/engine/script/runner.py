@@ -37,10 +37,20 @@ class ScriptRunner:
         self.current_segments: list[DialogueSegment] = []
         self.current_total_units = 0
         self.current_index = 0
+        self.current_pause_points: list[tuple[int, int]] = []
+        self.current_pause_cursor = 0
+        self.current_speed_points: list[tuple[int, int]] = []
+        self.current_speed_cursor = 0
+        self.current_interval_ms_effective = 30
+        self.waiting_for_pause = False
         self.type_interval_ms = 30
 
         self.type_timer = QTimer(view)
         self.type_timer.timeout.connect(self._on_typewriter_tick)
+
+        self.pause_timer = QTimer(view)
+        self.pause_timer.setSingleShot(True)
+        self.pause_timer.timeout.connect(self._on_pause_timeout)
 
         self.view.advanceRequested.connect(self._on_advance_requested)
         self._apply_defaults()
@@ -53,10 +63,12 @@ class ScriptRunner:
         """显示当前节点；必要时自动跳转到下一个节点。"""
         if self.index >= len(self.flow):
             self.view.set_name("")
-            self.view.show_text("(没有了喵、再点也不会有反应的喵)")
+            self.view.show_text("(没有了喵，再点也不会有反应的喵)")
             self.waiting_for_click = False
             self.typing = False
+            self.waiting_for_pause = False
             self.type_timer.stop()
+            self.pause_timer.stop()
             return
 
         node_id = self.flow[self.index]
@@ -69,14 +81,18 @@ class ScriptRunner:
             return
 
         if node_type == "formula":
+            self.type_timer.stop()
+            self.pause_timer.stop()
+            self.waiting_for_pause = False
+            self.typing = False
+
             self.view.set_name("")
             expr = node.get("latex", "")
             if not expr:
-                self.view.show_text("(滚木公式节点)")
+                self.view.show_text("(空公式节点)")
             else:
                 self.view.show_formula(expr)
 
-            self.typing = False
             self.waiting_for_click = True
             return
 
@@ -110,44 +126,198 @@ class ScriptRunner:
         self.current_segments = parse_dialogue_segments(text)
         self.current_total_units = count_reveal_units(self.current_segments)
         self.current_index = 0
+        self.current_pause_points = self._collect_pause_points(self.current_segments)
+        self.current_pause_cursor = 0
+        self.current_speed_points = self._collect_speed_points(self.current_segments)
+        self.current_speed_cursor = 0
+        self.current_interval_ms_effective = max(1, int(self.type_interval_ms))
+        self.waiting_for_pause = False
 
         self.typing = True
         self.waiting_for_click = False
         self.view.show_text_segments(self.current_segments, 0)
 
         self.type_timer.stop()
-        if self.current_total_units == 0:
-            self.typing = False
-            self.waiting_for_click = True
+        self.pause_timer.stop()
+        self._apply_speed_changes_up_to_current_index()
+
+        if self._try_pause_at_current_index():
             return
 
-        self.type_timer.start(self.type_interval_ms)
+        if self.current_total_units == 0:
+            self._finish_current_typewriter()
+            return
+
+        self.type_timer.start(self.current_interval_ms_effective)
 
     def _on_typewriter_tick(self) -> None:
         if not self.typing:
             self.type_timer.stop()
             return
 
-        if self.current_index >= self.current_total_units:
+        if self.waiting_for_pause:
             self.type_timer.stop()
-            self.typing = False
-            self.waiting_for_click = True
-            self.view.show_text_segments(self.current_segments)
+            return
+
+        if self.current_index >= self.current_total_units:
+            self._finish_current_typewriter()
             return
 
         self.current_index += 1
         self.view.show_text_segments(self.current_segments, self.current_index)
+        self._apply_speed_changes_up_to_current_index()
+
+        if self._try_pause_at_current_index():
+            return
+
+        if self.current_index >= self.current_total_units:
+            self._finish_current_typewriter()
+
+    def _on_pause_timeout(self) -> None:
+        if not self.typing:
+            return
+
+        self.waiting_for_pause = False
+        self._apply_speed_changes_up_to_current_index()
+        if self.current_index >= self.current_total_units:
+            self._finish_current_typewriter()
+            return
+
+        self.type_timer.start(self.current_interval_ms_effective)
+
+    def _try_pause_at_current_index(self) -> bool:
+        """若当前位置命中 pause 点，则停下并等待一段时间。"""
+        if self.current_pause_cursor >= len(self.current_pause_points):
+            return False
+
+        pause_unit, pause_ms = self.current_pause_points[self.current_pause_cursor]
+        if pause_unit != self.current_index:
+            return False
+
+        self.current_pause_cursor += 1
+        self.waiting_for_pause = True
+        self.type_timer.stop()
+        self.pause_timer.start(max(0, int(pause_ms)))
+        return True
+
+    def _jump_to_next_pause_or_finish(self) -> None:
+        """点击时：跳到同节点下一个 pause；若不存在则直接补全本句。"""
+        self.pause_timer.stop()
+        self.waiting_for_pause = False
+
+        if self.current_pause_cursor >= len(self.current_pause_points):
+            self._finish_current_typewriter()
+            return
+
+        target_unit, _ = self.current_pause_points[self.current_pause_cursor]
+        self.current_index = max(
+            self.current_index,
+            min(target_unit, self.current_total_units),
+        )
+        self.view.show_text_segments(self.current_segments, self.current_index)
+        self._apply_speed_changes_up_to_current_index()
+
+        if self.current_index >= self.current_total_units:
+            self._finish_current_typewriter()
+            return
+
+        if self._try_pause_at_current_index():
+            return
+
+        self.type_timer.start(self.current_interval_ms_effective)
+
+    def _finish_current_typewriter(self) -> None:
+        self.type_timer.stop()
+        self.pause_timer.stop()
+        self.waiting_for_pause = False
+        self.typing = False
+        self.waiting_for_click = True
+        self.current_index = self.current_total_units
+        self.view.show_text_segments(self.current_segments)
+
+    def _apply_speed_changes_up_to_current_index(self) -> None:
+        """将当前位置之前（含当前位置）的 speed 指令应用到当前打字间隔。"""
+        changed = False
+        while self.current_speed_cursor < len(self.current_speed_points):
+            unit_index, interval_ms = self.current_speed_points[self.current_speed_cursor]
+            if unit_index > self.current_index:
+                break
+            self.current_interval_ms_effective = max(1, int(interval_ms))
+            self.current_speed_cursor += 1
+            changed = True
+
+        if changed and self.type_timer.isActive():
+            self.type_timer.setInterval(self.current_interval_ms_effective)
+
+    @staticmethod
+    def _collect_pause_points(segments: list[DialogueSegment]) -> list[tuple[int, int]]:
+        """收集当前 say 中的 pause 点，格式为 (reveal_unit_index, duration_ms)。"""
+        points: list[tuple[int, int]] = []
+        unit_index = 0
+
+        for segment in segments:
+            if segment.kind == "text":
+                unit_index += len(segment.content)
+                continue
+
+            if segment.kind == "formula":
+                unit_index += 1
+                continue
+
+            if segment.kind != "pause":
+                continue
+
+            try:
+                duration_ms = max(0, int(segment.content))
+            except ValueError:
+                continue
+
+            if points and points[-1][0] == unit_index:
+                prev_unit, prev_ms = points[-1]
+                points[-1] = (prev_unit, prev_ms + duration_ms)
+            else:
+                points.append((unit_index, duration_ms))
+
+        return points
+
+    @staticmethod
+    def _collect_speed_points(segments: list[DialogueSegment]) -> list[tuple[int, int]]:
+        """收集当前 say 中的 speed 点，格式为 (reveal_unit_index, interval_ms)。"""
+        points: list[tuple[int, int]] = []
+        unit_index = 0
+
+        for segment in segments:
+            if segment.kind == "text":
+                unit_index += len(segment.content)
+                continue
+
+            if segment.kind == "formula":
+                unit_index += 1
+                continue
+
+            if segment.kind != "speed":
+                continue
+
+            try:
+                interval_ms = max(1, int(segment.content))
+            except ValueError:
+                continue
+
+            if points and points[-1][0] == unit_index:
+                points[-1] = (unit_index, interval_ms)
+            else:
+                points.append((unit_index, interval_ms))
+
+        return points
 
     def _on_advance_requested(self) -> None:
-        """点击推进:
-        1. 正在打字 -> 直接补全本句
+        """点击推进。
+
+        1. 正在打字 -> 跳到本节点下一个停顿；若无停顿则直接补全本句
         2. 已显示完成 -> 前进到下一个节点
         """
         if self.typing:
-            self.type_timer.stop()
-            self.typing = False
-            self.waiting_for_click = True
-            self.view.show_text_segments(self.current_segments)
+            self._jump_to_next_pause_or_finish()
             return
 
         if self.waiting_for_click:
@@ -209,8 +379,11 @@ class ScriptRunner:
             return
 
         self.type_interval_ms = max(1, int(interval_ms))
+        if self.typing:
+            self.current_interval_ms_effective = self.type_interval_ms
+            self._apply_speed_changes_up_to_current_index()
         if self.type_timer.isActive():
-            self.type_timer.setInterval(self.type_interval_ms)
+            self.type_timer.setInterval(self.current_interval_ms_effective)
 
     @staticmethod
     def _read_str(node: dict[str, Any], *keys: str) -> str | None:

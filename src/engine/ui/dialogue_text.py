@@ -47,6 +47,8 @@ _FX_TAG_CLASS_MAP = {
     "delta": "fx-delta"
 }
 _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+_PAUSE_TAG_RE = re.compile(r"<\s*pause\b([^<>]*?)\s*/?\s*>", re.IGNORECASE)
+_SPEED_TAG_RE = re.compile(r"<\s*speed\b([^<>]*?)\s*/?\s*>", re.IGNORECASE)
 
 
 def _is_truthy_env(name: str) -> bool:
@@ -132,6 +134,201 @@ def _parse_span_attrs(attrs_text: str) -> str | None:
         index = match.end()
 
     return " ".join(normalized_parts)
+
+
+def _parse_pause_duration_literal(value: str, default_unit: str) -> int | None:
+
+    token = value.strip().lower()
+    if not token:
+        return None
+
+    unit = default_unit
+    if token.endswith("ms"):
+        unit = "ms"
+        token = token[:-2].strip()
+    elif token.endswith("s"):
+        unit = "s"
+        token = token[:-1].strip()
+
+    if not re.fullmatch(r"\d+(?:\.\d+)?", token):
+        return None
+
+    number = float(token)
+    if number < 0:
+        return None
+
+    duration_ms = number if unit == "ms" else number * 1000.0
+    return max(0, min(600_000, int(round(duration_ms))))
+
+
+def _parse_pause_duration_ms(attrs_text: str) -> int | None:
+    """解析 <pause ...> 时长，返回毫秒。"""
+    attrs_text = attrs_text.strip()
+    if not attrs_text:
+        return 500
+
+    durations: list[int] = []
+    index = 0
+    used_named_attrs = False
+
+    while index < len(attrs_text):
+        while index < len(attrs_text) and attrs_text[index].isspace():
+            index += 1
+        if index >= len(attrs_text):
+            break
+
+        match = _HTML_ATTR_RE.match(attrs_text, index)
+        if match is None:
+            break
+
+        used_named_attrs = True
+        attr_name = match.group(1).lower()
+        raw_value = match.group(2) if match.group(2) is not None else match.group(3)
+
+        if attr_name in {"ms", "millisecond", "milliseconds"}:
+            duration = _parse_pause_duration_literal(raw_value, default_unit="ms")
+        elif attr_name in {
+            "s",
+            "sec",
+            "secs",
+            "second",
+            "seconds",
+            "t",
+            "time",
+            "duration",
+        }:
+            duration = _parse_pause_duration_literal(raw_value, default_unit="s")
+        else:
+            return None
+
+        if duration is None:
+            return None
+
+        durations.append(duration)
+        index = match.end()
+
+    if used_named_attrs:
+        if attrs_text[index:].strip():
+            return None
+        return durations[-1] if durations else 500
+
+    return _parse_pause_duration_literal(attrs_text, default_unit="s")
+
+
+def _parse_speed_interval_ms(attrs_text: str) -> int | None:
+    """解析 <speed ...> 配置，返回打字间隔毫秒。"""
+    attrs_text = attrs_text.strip()
+    if not attrs_text:
+        return None
+
+    values: list[int] = []
+    index = 0
+    used_named_attrs = False
+
+    while index < len(attrs_text):
+        while index < len(attrs_text) and attrs_text[index].isspace():
+            index += 1
+        if index >= len(attrs_text):
+            break
+
+        match = _HTML_ATTR_RE.match(attrs_text, index)
+        if match is None:
+            break
+
+        used_named_attrs = True
+        attr_name = match.group(1).lower()
+        raw_value = (match.group(2) if match.group(2) is not None else match.group(3)).strip()
+
+        if attr_name in {"ms", "interval", "speed", "speed_ms", "type_interval_ms", "interval_ms"}:
+            interval = _parse_pause_duration_literal(raw_value, default_unit="ms")
+            if interval is None:
+                return None
+        elif attr_name in {"cps", "chars_per_second"}:
+            if not re.fullmatch(r"\d+(?:\.\d+)?", raw_value):
+                return None
+            cps = float(raw_value)
+            if cps <= 0:
+                return None
+            interval = int(round(1000.0 / cps))
+        else:
+            return None
+
+        values.append(max(1, min(60_000, interval)))
+        index = match.end()
+
+    if used_named_attrs:
+        if attrs_text[index:].strip():
+            return None
+        return values[-1] if values else None
+
+    token = attrs_text.strip().lower()
+    token_match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(ms|s|cps)?", token)
+    if token_match is None:
+        return None
+
+    number = float(token_match.group(1))
+    if number <= 0:
+        return None
+
+    unit = token_match.group(2) or "ms"
+    if unit == "cps":
+        interval_ms = int(round(1000.0 / number))
+    elif unit == "s":
+        interval_ms = int(round(number * 1000.0))
+    else:
+        interval_ms = int(round(number))
+
+    return max(1, min(60_000, interval_ms))
+
+
+def _extract_pause_segment(text: str, start_index: int) -> tuple[int | None, int]:
+    """从 text[start_index] 处提取 <pause ...> 指令。"""
+    closing_index = text.find(">", start_index + 1)
+    if closing_index == -1:
+        return None, start_index
+
+    if closing_index - start_index > 256:
+        return None, start_index
+
+    candidate = text[start_index : closing_index + 1]
+    if "\n" in candidate or "\r" in candidate:
+        return None, start_index
+
+    match = _PAUSE_TAG_RE.fullmatch(candidate)
+    if match is None:
+        return None, start_index
+
+    attrs_text = match.group(1) or ""
+    duration_ms = _parse_pause_duration_ms(attrs_text)
+    if duration_ms is None:
+        return None, start_index
+
+    return duration_ms, closing_index + 1
+
+
+def _extract_speed_segment(text: str, start_index: int) -> tuple[int | None, int]:
+    """从 text[start_index] 处提取 <speed ...> 指令。"""
+    closing_index = text.find(">", start_index + 1)
+    if closing_index == -1:
+        return None, start_index
+
+    if closing_index - start_index > 256:
+        return None, start_index
+
+    candidate = text[start_index : closing_index + 1]
+    if "\n" in candidate or "\r" in candidate:
+        return None, start_index
+
+    match = _SPEED_TAG_RE.fullmatch(candidate)
+    if match is None:
+        return None, start_index
+
+    attrs_text = match.group(1) or ""
+    interval_ms = _parse_speed_interval_ms(attrs_text)
+    if interval_ms is None:
+        return None, start_index
+
+    return interval_ms, closing_index + 1
 
 
 def _sanitize_html_tag(candidate: str) -> str | None:
@@ -274,6 +471,22 @@ def parse_dialogue_segments(
             continue
 
         if not in_formula and char == "<":
+            pause_ms, next_index = _extract_pause_segment(text, index)
+            if pause_ms is not None:
+                _append_text_segment(segments, "".join(text_buffer))
+                text_buffer.clear()
+                segments.append(DialogueSegment("pause", str(pause_ms)))
+                index = next_index
+                continue
+
+            speed_ms, next_index = _extract_speed_segment(text, index)
+            if speed_ms is not None:
+                _append_text_segment(segments, "".join(text_buffer))
+                text_buffer.clear()
+                segments.append(DialogueSegment("speed", str(speed_ms)))
+                index = next_index
+                continue
+
             html_tag, next_index = _extract_supported_html_tag(
                 text, index, allow_all_html
             )
@@ -308,7 +521,7 @@ def count_reveal_units(segments: list[DialogueSegment]) -> int:
     for segment in segments:
         if segment.kind == "formula":
             total += 1
-        elif segment.kind == "html":
+        elif segment.kind in {"html", "pause", "speed"}:
             total += 0
         else:
             total += len(segment.content)
@@ -336,6 +549,9 @@ def _segments_to_markdown(
     parts: list[str] = []
 
     for segment in segments:
+        if segment.kind in {"pause", "speed"}:
+            continue
+
         if segment.kind == "html":
             parts.append(segment.content)
             continue
