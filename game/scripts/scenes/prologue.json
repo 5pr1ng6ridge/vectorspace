@@ -2,7 +2,7 @@
   "id": "prologue",
   "defaults": {
     "style": { "name_font_size": 27,"font_size": 33, "color": "#F5A9B8", "name_color": "#FFFFFF" },
-    "typing": { "speed_ms": 15 }
+    "typing": { "speed_ms": 30 }
   },
   "start": "bg0",
   "nodes": {
@@ -13,7 +13,7 @@
     "s0": {
       "type": "say",
       "speaker": "ヨミビトシラズ",
-      "text": "在不计其数的<span style=\"color: white;\"><i>archive</i></span>之上  在半径25cm的窗户上  注视着你 <pause ms=\"500\"/><h1 style=\"font-size:27px;\"><i><epsilon>掃いて捨てるほどの記録の上  半径25cmの窓で  きみを見ている  </epsilon></i></h1>"
+      "text": "在不计其数的<span style=\"color: white;\"><i>archive</i></span>之上  在半径25cm的窗户上  注视着你 <pause ms=\"500\"/><h1 style=\"font-size:30px;\"><i><epsilon>掃いて捨てるほどの記録の上  半径25cmの窓で  きみを見ている  </epsilon></i></h1>"
     },
     "st0": {
       "type": "style",
@@ -54,7 +54,7 @@
     "s4": {
       "type": "say",
       "speaker": "?",
-      "text": "这里可以放矩阵，但是它不会换行。"
+      "text": "这里可以放矩阵。<mt style=\"font-size:30px;\">$$\\begin{pmatrix} a & b & c \\\\ e & f & g \\\\ i & j & k \\end{pmatrix} $$</mt>嗯对。"
     },
     "s5": {
       "type": "say",

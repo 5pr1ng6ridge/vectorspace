@@ -240,9 +240,12 @@ def _parse_speed_interval_ms(attrs_text: str) -> int | None:
         raw_value = (match.group(2) if match.group(2) is not None else match.group(3)).strip()
 
         if attr_name in {"ms", "interval", "speed", "speed_ms", "type_interval_ms", "interval_ms"}:
-            interval = _parse_pause_duration_literal(raw_value, default_unit="ms")
-            if interval is None:
-                return None
+            if raw_value == "-1":
+                interval = -1
+            else:
+                interval = _parse_pause_duration_literal(raw_value, default_unit="ms")
+                if interval is None:
+                    return None
         elif attr_name in {"cps", "chars_per_second"}:
             if not re.fullmatch(r"\d+(?:\.\d+)?", raw_value):
                 return None
@@ -253,7 +256,10 @@ def _parse_speed_interval_ms(attrs_text: str) -> int | None:
         else:
             return None
 
-        values.append(max(1, min(60_000, interval)))
+        if interval == -1:
+            values.append(-1)
+        else:
+            values.append(max(1, min(60_000, interval)))
         index = match.end()
 
     if used_named_attrs:
@@ -262,6 +268,9 @@ def _parse_speed_interval_ms(attrs_text: str) -> int | None:
         return values[-1] if values else None
 
     token = attrs_text.strip().lower()
+    if token == "-1":
+        return -1
+
     token_match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(ms|s|cps)?", token)
     if token_match is None:
         return None
@@ -437,6 +446,8 @@ def parse_dialogue_segments(
     text_buffer: list[str] = []
     formula_buffer: list[str] = []
     in_formula = False
+    formula_delimiter_len = 1
+    formula_kind = "formula"
     index = 0
 
     while index < len(text):
@@ -452,23 +463,42 @@ def parse_dialogue_segments(
 
         if char == "$":
             if in_formula:
-                expr = "".join(formula_buffer).strip()
-                if expr:
-                    _append_text_segment(segments, "".join(text_buffer))
-                    text_buffer.clear()
-                    segments.append(DialogueSegment("formula", expr))
+                is_closing = False
+                if formula_delimiter_len == 2:
+                    is_closing = index + 1 < len(text) and text[index + 1] == "$"
                 else:
-                    text_buffer.append("$$")
+                    is_closing = True
 
-                formula_buffer.clear()
-                in_formula = False
+                if is_closing:
+                    expr = "".join(formula_buffer).strip()
+                    if expr:
+                        _append_text_segment(segments, "".join(text_buffer))
+                        text_buffer.clear()
+                        segments.append(DialogueSegment(formula_kind, expr))
+                    else:
+                        text_buffer.append("$" * (formula_delimiter_len * 2))
+
+                    consumed = formula_delimiter_len
+                    formula_buffer.clear()
+                    in_formula = False
+                    formula_delimiter_len = 1
+                    formula_kind = "formula"
+                    index += consumed
+                    continue
             else:
                 _append_text_segment(segments, "".join(text_buffer))
                 text_buffer.clear()
-                in_formula = True
-
-            index += 1
-            continue
+                if index + 1 < len(text) and text[index + 1] == "$":
+                    in_formula = True
+                    formula_delimiter_len = 2
+                    formula_kind = "formula_display"
+                    index += 2
+                else:
+                    in_formula = True
+                    formula_delimiter_len = 1
+                    formula_kind = "formula"
+                    index += 1
+                continue
 
         if not in_formula and char == "<":
             pause_ms, next_index = _extract_pause_segment(text, index)
@@ -502,7 +532,7 @@ def parse_dialogue_segments(
         index += 1
 
     if in_formula:
-        text_buffer.append("$")
+        text_buffer.append("$" * formula_delimiter_len)
         text_buffer.extend(formula_buffer)
 
     _append_text_segment(segments, "".join(text_buffer))
@@ -519,7 +549,7 @@ def count_reveal_units(segments: list[DialogueSegment]) -> int:
     """
     total = 0
     for segment in segments:
-        if segment.kind == "formula":
+        if segment.kind in {"formula", "formula_display"}:
             total += 1
         elif segment.kind in {"html", "pause", "speed"}:
             total += 0
@@ -534,6 +564,12 @@ def _escape_markdown_text(text: str) -> str:
 
 def _hidden_text_html(text: str) -> str:
     return html.escape(text).replace("\n", "<br/>")
+
+
+def _protect_formula_for_markdown(formula_text: str) -> str:
+    """保护公式文本，避免 markdown 改写反斜杠导致矩阵行丢失。"""
+    escaped = html.escape(formula_text, quote=False)
+    return escaped.replace("\\", "&#92;")
 
 
 def _segments_to_markdown(
@@ -556,13 +592,17 @@ def _segments_to_markdown(
             parts.append(segment.content)
             continue
 
-        if segment.kind == "formula":
-            formula = f"${segment.content}$"
+        if segment.kind in {"formula", "formula_display"}:
+            if segment.kind == "formula_display":
+                formula = f"$${segment.content}$$"
+            else:
+                formula = f"${segment.content}$"
+            protected_formula = _protect_formula_for_markdown(formula)
             visible = remaining is None or remaining > 0
             if visible:
-                parts.append(formula)
+                parts.append(protected_formula)
             else:
-                parts.append(f'<span class="hidden-math">{formula}</span>')
+                parts.append(f'<span class="hidden-math">{protected_formula}</span>')
 
             if remaining is not None and remaining > 0:
                 remaining -= 1

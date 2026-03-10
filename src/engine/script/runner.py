@@ -41,7 +41,9 @@ class ScriptRunner:
         self.current_pause_cursor = 0
         self.current_speed_points: list[tuple[int, int]] = []
         self.current_speed_cursor = 0
+        self.current_unit_boundaries: list[int] = []
         self.current_interval_ms_effective = 30
+        self.current_step_by_unit = False
         self.waiting_for_pause = False
         self.type_interval_ms = 30
 
@@ -130,7 +132,9 @@ class ScriptRunner:
         self.current_pause_cursor = 0
         self.current_speed_points = self._collect_speed_points(self.current_segments)
         self.current_speed_cursor = 0
+        self.current_unit_boundaries = self._collect_unit_boundaries(self.current_segments)
         self.current_interval_ms_effective = max(1, int(self.type_interval_ms))
+        self.current_step_by_unit = False
         self.waiting_for_pause = False
 
         self.typing = True
@@ -163,7 +167,7 @@ class ScriptRunner:
             self._finish_current_typewriter()
             return
 
-        self.current_index += 1
+        self.current_index = self._advance_reveal_progress(self.current_index)
         self.view.show_text_segments(self.current_segments, self.current_index)
         self._apply_speed_changes_up_to_current_index()
 
@@ -235,6 +239,18 @@ class ScriptRunner:
         self.current_index = self.current_total_units
         self.view.show_text_segments(self.current_segments)
 
+    def _advance_reveal_progress(self, current_index: int) -> int:
+        """按当前 speed 模式推进 reveal 进度。"""
+        if self.current_step_by_unit:
+            return self._next_unit_boundary_after(current_index)
+        return min(self.current_total_units, current_index + 1)
+
+    def _next_unit_boundary_after(self, current_index: int) -> int:
+        for boundary in self.current_unit_boundaries:
+            if boundary > current_index:
+                return boundary
+        return self.current_total_units
+
     def _apply_speed_changes_up_to_current_index(self) -> None:
         """将当前位置之前（含当前位置）的 speed 指令应用到当前打字间隔。"""
         changed = False
@@ -242,7 +258,11 @@ class ScriptRunner:
             unit_index, interval_ms = self.current_speed_points[self.current_speed_cursor]
             if unit_index > self.current_index:
                 break
-            self.current_interval_ms_effective = max(1, int(interval_ms))
+            if int(interval_ms) == -1:
+                self.current_step_by_unit = True
+            else:
+                self.current_step_by_unit = False
+                self.current_interval_ms_effective = max(1, int(interval_ms))
             self.current_speed_cursor += 1
             changed = True
 
@@ -260,7 +280,7 @@ class ScriptRunner:
                 unit_index += len(segment.content)
                 continue
 
-            if segment.kind == "formula":
+            if segment.kind in {"formula", "formula_display"}:
                 unit_index += 1
                 continue
 
@@ -291,7 +311,7 @@ class ScriptRunner:
                 unit_index += len(segment.content)
                 continue
 
-            if segment.kind == "formula":
+            if segment.kind in {"formula", "formula_display"}:
                 unit_index += 1
                 continue
 
@@ -299,16 +319,38 @@ class ScriptRunner:
                 continue
 
             try:
-                interval_ms = max(1, int(segment.content))
+                parsed_interval = int(segment.content)
             except ValueError:
                 continue
 
+            if parsed_interval != -1:
+                parsed_interval = max(1, parsed_interval)
+
             if points and points[-1][0] == unit_index:
-                points[-1] = (unit_index, interval_ms)
+                points[-1] = (unit_index, parsed_interval)
             else:
-                points.append((unit_index, interval_ms))
+                points.append((unit_index, parsed_interval))
 
         return points
+
+    @staticmethod
+    def _collect_unit_boundaries(segments: list[DialogueSegment]) -> list[int]:
+        """收集“完整单位”的结束边界，用于 <speed -1/> 模式。"""
+        boundaries: list[int] = []
+        unit_index = 0
+
+        for segment in segments:
+            if segment.kind == "text":
+                if segment.content:
+                    unit_index += len(segment.content)
+                    boundaries.append(unit_index)
+                continue
+
+            if segment.kind in {"formula", "formula_display"}:
+                unit_index += 1
+                boundaries.append(unit_index)
+
+        return boundaries
 
     def _on_advance_requested(self) -> None:
         """点击推进。
