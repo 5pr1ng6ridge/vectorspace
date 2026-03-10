@@ -49,12 +49,12 @@
     "s3": {
       "type": "say",
       "speaker": "?",
-      "text": "$x^{1919810}$喵"
+      "text": "$\\mathcal{L}\\{f(t)\\} = F(s) = \\int_0^\\infty f(t)e^{-st}\\,dt $喵"
     },
     "s4": {
       "type": "say",
       "speaker": "?",
-      "text": "这里可以放矩阵。<mt style=\"font-size:30px;\">$$\\begin{pmatrix} a & b & c \\\\ e & f & g \\\\ i & j & k \\end{pmatrix} $$</mt>嗯对。"
+      "text": "这里可以放矩阵。<mt style=\"font-size:30px;\">$$\\begin{pmatrix} a & b & c \\\\ e & f & g \\\\ i & j & k \\end{pmatrix} $$</mt>"
     },
     "s5": {
       "type": "say",
