@@ -1,65 +1,113 @@
 ﻿from __future__ import annotations
 
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional, Union, Deque
+from collections import deque
+from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import (
     QFontDatabase,
     QFont,
     QTextCursor,
+    QKeyEvent,
 )
-from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QPlainTextEdit,
-    QLineEdit
-)
+from PySide6.QtWidgets import QPlainTextEdit
 
 from ..resources.paths import asset_path
 
 
-class TerminalView(QWidget):
-    # 外部可以连这个信号来切到 GameView
+
+@dataclass
+class PrintLineStep:
+    text: str
+    delay_ms: int = 200
+
+
+@dataclass
+class ReplaceLastLineStep:
+    text: str
+    delay_ms: int = 200
+
+
+@dataclass
+class ProgressStep:
+    prefix: str
+    start: int = 0
+    end: int = 100
+    step: int = 10
+    interval_ms: int = 80
+
+
+@dataclass
+class DotsStep:
+    prefix: str
+    cycles: int = 3
+    interval_ms: int = 250
+
+
+@dataclass
+class CallbackStep:
+    callback: Callable[[], None]
+    delay_ms: int = 0
+    
+@dataclass
+class TimedLine:
+    text: str
+    delay_ms: int = 300
+
+TerminalStep = Union[
+    PrintLineStep,
+    ReplaceLastLineStep,
+    ProgressStep,
+    DotsStep,
+    CallbackStep,
+]
+
+
+
+class TerminalView(QPlainTextEdit):
+    """
+    Terminal-like控件：
+      - 输出和输入都在同一个区域
+      - 底部一行有 prompt，比如 'vectspace> '
+      - 输入回车执行命令
+      - ↑/↓ 翻历史
+      - 支持读条动画
+    """
     startGameRequested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
 
-        # ===== UI 基本结构 =====
-        self.output = QPlainTextEdit(self)
-        self.output.setReadOnly(True)
-        self.output.setUndoRedoEnabled(False)
-        self.output.setFrameShape(QPlainTextEdit.NoFrame)
-        self.output.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.output.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # 样式
+        self.setReadOnly(False)
+        self.setUndoRedoEnabled(False)
+        self.setLineWrapMode(QPlainTextEdit.NoWrap)
 
-        self.input = TerminalInput(self)
-        self.input.returnPressed.connect(self._on_return_pressed)
-        self.input.historyUpRequested.connect(self._on_history_up)
-        self.input.historyDownRequested.connect(self._on_history_down)
+        self._prompt: str = "[VECTSPACE@system: ~]$ "
+        self._input_start_pos: int = 0  # 当前输入行的开始位置（在整个文本中的下标）
+        self._accept_input: bool = True
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
-        layout.addWidget(self.output, 1)
-        layout.addWidget(self.input, 0)
-
-        # ===== 状态 =====
+        # 历史
         self._history: List[str] = []
         self._history_index: int = 0
 
-        # 命令分发器：命令名 -> 处理函数
-        self._commands: Dict[str, Callable[[List[str]], None]] = {}
+        # 命令表
+        self._commands: Dict[str, Callable[[List[str]], bool]] = {}
         self._register_commands()
 
         self._apply_style()
         self._boot_text()
-
+        #self._cmd_init()
+        self._insert_prompt()
+        
+        
+        self._step_queue: Deque[TerminalStep] = deque()
+        self._queue_running: bool = False
+        
     def _apply_style(self) -> None:
         font = self._load_pixel_font(28)
-
-        self.output.setFont(font)
-        self.input.setFont(font)
+        self.setFont(font)
 
         self.setStyleSheet("""
             TerminalView {
@@ -90,182 +138,417 @@ class TerminalView(QWidget):
         return QFont("monospace", size)
 
     def _boot_text(self) -> None:
-        self.print_line("VECTSPACE Terminal v0.1")
-        self.print_line("Type 'help' for available commands.")
-        self.print_line("")
+        self.print_line("VECTSPACE Terminal v0.1\n")
+        self.print_line("Type 'help' for available commands.\n")
+        self.print_line("\n")
 
-    # ------------------------------------------------------------------
-    # 基础输出
-    # ------------------------------------------------------------------
-    def print_line(self, text: str = "") -> None:
-        """在终端末尾追加一行。"""
-        self.output.appendPlainText(text)
+    # ---------------- 基础输出操作 ----------------
+
+    def _scroll_to_bottom(self) -> None:
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+    def print_line(self, text: str = "", wrap=False) -> None:
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.setTextCursor(cursor)
+        if wrap == True:
+            cursor.insertText(text + "\n")
+        else:
+            cursor.insertText(text)
         self._scroll_to_bottom()
 
     def print_block(self, text: str) -> None:
-        """按行输出一个多行字符串。"""
-        for line in text.splitlines():
-            self.output.appendPlainText(line)
-        if text.endswith("\n"):
-            self.output.appendPlainText("")
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.setTextCursor(cursor)
+        cursor.insertText(text)
+        if not text.endswith("\n"):
+            cursor.insertText("\n")
         self._scroll_to_bottom()
-
-    def _scroll_to_bottom(self) -> None:
-        cursor = self.output.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        self.output.setTextCursor(cursor)
-        self.output.ensureCursorVisible()
-
+        
     def _replace_last_line(self, text: str) -> None:
-        """用 text 替换掉最后一行（用于进度条、loading...）。"""
-        cursor = self.output.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.movePosition(QTextCursor.StartOfLine, QTextCursor.KeepAnchor)
+        """只修改最后一行的内容，保留它后面的换行结构。"""
+        doc = self.document()
+        block = doc.lastBlock()
+        cursor = QTextCursor(block)
+        cursor.select(QTextCursor.LineUnderCursor)
         cursor.removeSelectedText()
         cursor.insertText(text)
-        self.output.setTextCursor(cursor)
-        self.output.ensureCursorVisible()
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
 
-    # ------------------------------------------------------------------
-    # 输入 & 命令历史
-    # ------------------------------------------------------------------
-    def _on_return_pressed(self) -> None:
-        raw = self.input.text()
-        command = raw.strip()
+    # ---------------- prompt & 输入区域 ----------------
 
-        # 打印一行提示符 + 输入
-        prompt = f"[vectspace@system ~]$ {raw}" if raw else "[vectspace@system ~]$"
-        self.print_line(prompt)
+    def _insert_prompt(self) -> None:
+        """在末尾插入一行 prompt，并准备输入。"""
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.setTextCursor(cursor)
+        cursor.insertText(self._prompt)
+        # 记录输入起点（在整个文档中的位置）
+        self._input_start_pos = cursor.position()
+        self._scroll_to_bottom()
 
-        if command:
-            self._history.append(command)
-            self._history_index = len(self._history)
+    def _current_input_text(self) -> str:
+        """取出当前 prompt 之后的输入内容。"""
+        full = self.toPlainText()
+        if self._input_start_pos >= len(full):
+            return ""
+        return full[self._input_start_pos:].rstrip("\n")
 
-        self.input.clear()
+    def _finish_terminal_sequence(self) -> None:
+        self._accept_input = True
+        self._insert_prompt()
 
-        if command:
-            self._execute_command(command)
+    # ---------------- 键盘事件重写：实现终端行为 ----------------
 
-    def _on_history_up(self) -> None:
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if not self._accept_input:
+            # 读条时禁用输入（你喜欢也可以允许 Ctrl+C 之类的）
+            return
+
+        key = event.key()
+
+        cursor = self.textCursor()
+        self.setTextCursor(cursor)
+
+        # ↑ / ↓ 历史
+        if key == Qt.Key_Up:
+            self._history_prev()
+            return
+        if key == Qt.Key_Down:
+            self._history_next()
+            return
+
+        # Home：跳到输入起点
+        if key == Qt.Key_Home:
+            cursor = self.textCursor()
+            cursor.setPosition(self._input_start_pos)
+            self.setTextCursor(cursor)
+            return
+
+        # Backspace：不允许删到 prompt 左边
+        if key == Qt.Key_Backspace:
+            cursor = self.textCursor()
+            if cursor.position() <= self._input_start_pos:
+                return
+            return super().keyPressEvent(event)
+
+        # Left：不允许左移越过 prompt
+        if key == Qt.Key_Left:
+            cursor = self.textCursor()
+            if cursor.position() <= self._input_start_pos:
+                return
+            return super().keyPressEvent(event)
+
+        # Enter：提交命令
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            command = self._current_input_text()
+            # 先插入换行，让这一行固定下来
+            super().keyPressEvent(event)
+
+            # 存历史
+            cmd_stripped = command.strip()
+            if cmd_stripped:
+                self._history.append(cmd_stripped)
+                self._history_index = len(self._history)
+
+            # 执行命令；根据返回值决定是否立刻追加一个新 prompt
+            immediate_prompt = self._execute_command(cmd_stripped)
+            if immediate_prompt:
+                self._insert_prompt()
+            return
+
+        # 其他按键：正常处理（文本输入）
+        super().keyPressEvent(event)
+
+    # ---------------- 历史操作 ----------------
+
+    def _history_prev(self) -> None:
         if not self._history:
             return
         if self._history_index > 0:
             self._history_index -= 1
         cmd = self._history[self._history_index]
-        self.input.setText(cmd)
-        self.input.setCursorPosition(len(cmd))
+        self._set_current_input(cmd)
 
-    def _on_history_down(self) -> None:
+    def _history_next(self) -> None:
         if not self._history:
             return
         if self._history_index < len(self._history) - 1:
             self._history_index += 1
             cmd = self._history[self._history_index]
         else:
-            # 超过历史最后一条 -> 清空输入框
             self._history_index = len(self._history)
             cmd = ""
-        self.input.setText(cmd)
-        self.input.setCursorPosition(len(cmd))
+        self._set_current_input(cmd)
 
-    # ------------------------------------------------------------------
-    # 命令分发器
-    # ------------------------------------------------------------------
+    def _set_current_input(self, text: str) -> None:
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.setTextCursor(cursor)
+
+        # 选中当前输入区域并替换
+        cursor.setPosition(self._input_start_pos, QTextCursor.KeepAnchor)
+        cursor.removeSelectedText()
+        cursor.insertText(text)
+        self._scroll_to_bottom()
+
+    # ---------------- 命令分发器 ----------------
+
     def _register_commands(self) -> None:
+        # handler(args) -> bool：返回 True 表示需要立即追加新 prompt
         self._commands = {
             "help": self._cmd_help,
             "start": self._cmd_start,
-            "t": self._cmd_test,
             "clear": self._cmd_clear,
             "echo": self._cmd_echo,
-            "boot": self._cmd_boot_demo,   # 做个读取动画演示
+            "boot": self._cmd_boot_demo,  # demo loading 动画
+            "init": self._cmd_init,
         }
 
-    def _execute_command(self, command: str) -> None:
+    def _execute_command(self, command: str) -> bool:
+        if not command:
+            return True  # 空命令就直接再给一个 prompt
+
         parts = command.split()
-        if not parts:
-            return
         name = parts[0].lower()
         args = parts[1:]
 
         handler = self._commands.get(name)
         if handler is None:
-            self.print_line(f"Unknown command: {name}")
-            return
-        handler(args)
+            self.print_line(f"Unknown command: {name}"+"\n")
+            return True
 
-    # ------------------------------------------------------------------
-    # 各个命令的实现
-    # ------------------------------------------------------------------
-    def _cmd_help(self, args: list[str]) -> None:
+        return handler(args)
+
+    # ====== 各命令实现：返回值决定要不要立即加 prompt ======
+
+    def _cmd_help(self, args: List[str]) -> bool:
         self.print_block(
             "Available commands:\n"
             "  help        - show this message\n"
-            "  start       - enter the game\n"
+            "  start       - enter the game (with loading)\n"
             "  clear       - clear terminal output\n"
             "  echo TEXT   - print TEXT\n"
             "  boot        - demo loading sequence\n"
         )
+        return True
 
-    def _cmd_clear(self, args: list[str]) -> None:
-        self.output.clear()
+    def _cmd_clear(self, args: List[str]) -> bool:
+        self.clear()
+        # 清空之后需要重新插入一行 prompt，由外面统一做
+        return True
 
-    def _cmd_echo(self, args: list[str]) -> None:
-        self.print_line(" ".join(args))
+    def _cmd_echo(self, args: List[str]) -> bool:
+        self.print_line(" ".join(args)+"\n")
+        return True
 
-    def _cmd_start(self, args: list[str]) -> None:
-        self._run_loading_sequence(
-            on_finished=lambda: self.startGameRequested.emit()
-        )
+    def _cmd_start(self, args: list[str]) -> bool:
+        self._accept_input = False
 
-    def _cmd_test(self, args: list[str]) -> None:
-        self.startGameRequested.emit()
+        steps = [
+            PrintLineStep("Initializing math engine...\n", 180),
+            PrintLineStep("Scanning proof archives...\n", 220),
+            PrintLineStep("Allocating Hilbert space...\n", 320),
+            PrintLineStep("\n", 120),
 
-    def _cmd_boot_demo(self, args: list[str]) -> None:
-        # 单纯演示用
-        self._run_loading_sequence(on_finished=None)
+            PrintLineStep("Loading resources 0%", 80),
+            ProgressStep(
+                prefix="Loading resources",
+                start=0,
+                end=100,
+                step=5,
+                interval_ms=70,
+            ),
+            PrintLineStep("\n", 10),
 
-    # ------------------------------------------------------------------
-    # 读条 / loading 效果
-    # ------------------------------------------------------------------
-    def _run_loading_sequence(self, on_finished: Callable[[], None] | None) -> None:
+            PrintLineStep("Ready", 80),
+            DotsStep(
+                prefix="Ready",
+                cycles=3,
+                interval_ms=250,
+            ),
+            PrintLineStep("\n", 10),
+
+            CallbackStep(self._finish_terminal_sequence),
+            #CallbackStep(self.startGameRequested.emit),
+        ]
+
+        self.enqueue_steps(steps)
+        return False
+
+    def _cmd_boot_demo(self, args: List[str]) -> bool:
+        # 单纯演示读条
+        self._run_loading_sequence(base_text="loading resources",on_finished=None)
+        return False
+    
+    def _cmd_init(self, args: List[str]) -> bool:      
+        boot_lines = [
+            TimedLine("Initializing layer V...", 180),
+            TimedLine("Scanning BCPU...", 220),
+            TimedLine("Allocating Hilbert space...", 400),
+            TimedLine("", 30),
+        ]
+ 
+    # ---------------- 读条动画：xx% + Loading... ----------------
+
+    def enqueue_steps(
+        self,
+        steps: list[TerminalStep],
+        on_finished: Optional[Callable[[], None]] = None,
+    ) -> None:
+        for step in steps:
+            self._step_queue.append(step)
+
+        if on_finished is not None:
+            self._step_queue.append(CallbackStep(on_finished))
+
+        if not self._queue_running:
+            self._queue_running = True
+            self._run_next_step()
+            
+    def _run_next_step(self) -> None:
+        if not self._step_queue:
+            self._queue_running = False
+            return
+
+        step = self._step_queue.popleft()
+
+        if isinstance(step, PrintLineStep):
+            self.print_line(step.text)
+            QTimer.singleShot(step.delay_ms, self._run_next_step)
+            return
+
+        if isinstance(step, ReplaceLastLineStep):
+            self._replace_last_line(step.text)
+            QTimer.singleShot(step.delay_ms, self._run_next_step)
+            return
+
+        if isinstance(step, ProgressStep):
+            self._run_progress_step(step, self._run_next_step)
+            return
+
+        if isinstance(step, DotsStep):
+            self._run_dots_step(step, self._run_next_step)
+            return
+
+        if isinstance(step, CallbackStep):
+            step.callback()
+            QTimer.singleShot(step.delay_ms, self._run_next_step)
+            return
+
+        # 未知 step，跳过
+        QTimer.singleShot(0, self._run_next_step)
+        
+    def _run_progress_step(
+        self,
+        step: ProgressStep,
+        on_finished: Callable[[], None],
+    ) -> None:
+        current = step.start
+
+        # 这里假定上一行已经存在，比如：
+        # PrintLineStep("Loading resources 0%")
+        # 然后 ProgressStep 负责不断替换它
+        def tick() -> None:
+            nonlocal current
+
+            self._replace_last_line(f"{step.prefix} {current}%")
+
+            if current >= step.end:
+                on_finished()
+                return
+
+            current = min(current + step.step, step.end)
+            QTimer.singleShot(step.interval_ms, tick)
+
+        tick()
+        
+    def _run_dots_step(
+        self,
+        step: DotsStep,
+        on_finished: Callable[[], None],
+    ) -> None:
+        states = ["", ".", "..", "..."]
+        total_ticks = step.cycles * len(states)
+        tick_index = 0
+
+        # 同样假定上一行已经存在，或者你也可以这里先 print_line(step.prefix)
+        def tick() -> None:
+            nonlocal tick_index
+
+            if tick_index >= total_ticks:
+                self._replace_last_line(f"{step.prefix}...")
+                on_finished()
+                return
+
+            suffix = states[tick_index % len(states)]
+            self._replace_last_line(f"{step.prefix}{suffix}")
+            tick_index += 1
+            QTimer.singleShot(step.interval_ms, tick)
+
+        tick()
+
+    def _run_progress_step(
+        self,
+        step: ProgressStep,
+        on_finished: Callable[[], None],
+    ) -> None:
+        current = step.start
+
+        # 这里假定上一行已经存在，比如：
+        # PrintLineStep("Loading resources 0%")
+        # 然后 ProgressStep 负责不断替换它
+        def tick() -> None:
+            nonlocal current
+
+            self._replace_last_line(f"{step.prefix} {current}%")
+
+            if current >= step.end:
+                on_finished()
+                return
+
+            current = min(current + step.step, step.end)
+            QTimer.singleShot(step.interval_ms, tick)
+
+        tick()
+
+    def _run_loading_sequence(self, prefix:str = "loading..."
+                              ,interval_ms:int = 80,
+                              on_finished: Optional[Callable[[], None]] = None) -> None:
         """
-        一个组合 demo：
-          1) 输出几行“准备中”日志
-          2) 显示一个 0% → 100% 的进度条
-          3) 最后一行为 Loading... 小点点动画
+        0% → 100% 进度条
         """
-        self.print_line("Initializing math engine...")
-        self.print_line("Scanning proof archives...")
-        self.print_line("Allocating Hilbert space...")
-        self.print_line("")  # 空行
+        self._accept_input = False
 
-        # 先输出一行初始进度
-        base_text = "Loading resources"
-        self.print_line(f"{base_text} 0%")
+        self.print_line(f"{prefix} 0%")
 
-        # 进度条配置
         total_steps = 20
-        interval_ms = 80
         current_step = 0
+
+        def finish_all() -> None:
+            self._accept_input = True
+            self._insert_prompt()
+            if on_finished is not None:
+                on_finished()
+
+        def after_progress() -> None:
+            self._replace_last_line(f"{prefix} 100%"+"\n")
+            finish_all()
 
         def progress_tick() -> None:
             nonlocal current_step
             current_step += 1
             if current_step > total_steps:
-                # 进度完成后，开始小点点动画
-                self._replace_last_line(f"{base_text} 100%")
-                self._run_dots_line(
-                    prefix="Ready",
-                    cycles=3,
-                    interval_ms=300,
-                    on_finished=on_finished,
-                )
+                after_progress()
                 return
 
             percent = int(current_step * 100 / total_steps)
-            self._replace_last_line(f"{base_text} {percent}%")
-
+            self._replace_last_line(f"{prefix} {percent}%")
             QTimer.singleShot(interval_ms, progress_tick)
 
         QTimer.singleShot(interval_ms, progress_tick)
@@ -273,26 +556,24 @@ class TerminalView(QWidget):
     def _run_dots_line(
         self,
         prefix: str = "Loading",
-        cycles: int = 3,
+        cycles: int = 1,
         interval_ms: int = 300,
-        on_finished: Callable[[], None] | None = None,
+        on_finished: Optional[Callable[[], None]] = None,
     ) -> None:
         """
-        在最后一行做 prefix., prefix.., prefix... 的循环动画。
-        cycles: 循环多少次（每个 cycle 是 "", ".", "..", "..." 这一串）
+        ...
+        cycles: 重复完整周期数
         """
-        states = ["", ".", "..", "..."]
+        states = [".", "..", "..."]
         total_ticks = cycles * len(states)
         tick_index = 0
 
-        # 先输出一行基础文本
-        self.print_line(f"{prefix}")
+        self.print_line(prefix)
 
         def tick() -> None:
             nonlocal tick_index
             if tick_index >= total_ticks:
-                # 动画结束
-                self._replace_last_line(f"{prefix}...")
+                self._replace_last_line(f"{prefix}..." +"\n")
                 if on_finished is not None:
                     on_finished()
                 return
@@ -303,16 +584,3 @@ class TerminalView(QWidget):
             QTimer.singleShot(interval_ms, tick)
 
         QTimer.singleShot(interval_ms, tick)
-        
-class TerminalInput(QLineEdit):
-    historyUpRequested = Signal()
-    historyDownRequested = Signal()
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Up:
-            self.historyUpRequested.emit()
-            return
-        if event.key() == Qt.Key_Down:
-            self.historyDownRequested.emit()
-            return
-        super().keyPressEvent(event)
