@@ -40,4 +40,4 @@ class GameWindow(QMainWindow):
     def enter_game(self) -> None:
         self.stack.setCurrentWidget(self.game_view)
         
-        self.scene_manager.load_scene("prologue")
+        self.scene_manager.load_scene("prologue")   

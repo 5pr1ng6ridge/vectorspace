@@ -98,7 +98,6 @@ class TerminalView(QPlainTextEdit):
 
         self._apply_style()
         self._boot_text()
-        #self._cmd_init()
         self._insert_prompt()
         
         
@@ -203,6 +202,9 @@ class TerminalView(QPlainTextEdit):
         self._accept_input = True
         self._insert_prompt()
 
+    def _jump_to_gameview(self) -> None:
+        self.startGameRequested.emit()
+    
     # ---------------- 键盘事件重写：实现终端行为 ----------------
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
@@ -306,8 +308,6 @@ class TerminalView(QPlainTextEdit):
             "start": self._cmd_start,
             "clear": self._cmd_clear,
             "echo": self._cmd_echo,
-            "boot": self._cmd_boot_demo,  # demo loading 动画
-            "init": self._cmd_init,
         }
 
     def _execute_command(self, command: str) -> bool:
@@ -374,25 +374,12 @@ class TerminalView(QPlainTextEdit):
             ),
             PrintLineStep("\n", 10),
 
-            CallbackStep(self._finish_terminal_sequence),
-            #CallbackStep(self.startGameRequested.emit),
+            #CallbackStep(self._finish_terminal_sequence, 10),
+            CallbackStep(self._jump_to_gameview),
         ]
 
         self.enqueue_steps(steps)
         return False
-
-    def _cmd_boot_demo(self, args: List[str]) -> bool:
-        # 单纯演示读条
-        self._run_loading_sequence(base_text="loading resources",on_finished=None)
-        return False
-    
-    def _cmd_init(self, args: List[str]) -> bool:      
-        boot_lines = [
-            TimedLine("Initializing layer V...", 180),
-            TimedLine("Scanning BCPU...", 220),
-            TimedLine("Allocating Hilbert space...", 400),
-            TimedLine("", 30),
-        ]
  
     # ---------------- 读条动画：xx% + Loading... ----------------
 
@@ -516,71 +503,3 @@ class TerminalView(QPlainTextEdit):
             QTimer.singleShot(step.interval_ms, tick)
 
         tick()
-
-    def _run_loading_sequence(self, prefix:str = "loading..."
-                              ,interval_ms:int = 80,
-                              on_finished: Optional[Callable[[], None]] = None) -> None:
-        """
-        0% → 100% 进度条
-        """
-        self._accept_input = False
-
-        self.print_line(f"{prefix} 0%")
-
-        total_steps = 20
-        current_step = 0
-
-        def finish_all() -> None:
-            self._accept_input = True
-            self._insert_prompt()
-            if on_finished is not None:
-                on_finished()
-
-        def after_progress() -> None:
-            self._replace_last_line(f"{prefix} 100%"+"\n")
-            finish_all()
-
-        def progress_tick() -> None:
-            nonlocal current_step
-            current_step += 1
-            if current_step > total_steps:
-                after_progress()
-                return
-
-            percent = int(current_step * 100 / total_steps)
-            self._replace_last_line(f"{prefix} {percent}%")
-            QTimer.singleShot(interval_ms, progress_tick)
-
-        QTimer.singleShot(interval_ms, progress_tick)
-
-    def _run_dots_line(
-        self,
-        prefix: str = "Loading",
-        cycles: int = 1,
-        interval_ms: int = 300,
-        on_finished: Optional[Callable[[], None]] = None,
-    ) -> None:
-        """
-        ...
-        cycles: 重复完整周期数
-        """
-        states = [".", "..", "..."]
-        total_ticks = cycles * len(states)
-        tick_index = 0
-
-        self.print_line(prefix)
-
-        def tick() -> None:
-            nonlocal tick_index
-            if tick_index >= total_ticks:
-                self._replace_last_line(f"{prefix}..." +"\n")
-                if on_finished is not None:
-                    on_finished()
-                return
-
-            state = states[tick_index % len(states)]
-            self._replace_last_line(f"{prefix}{state}")
-            tick_index += 1
-            QTimer.singleShot(interval_ms, tick)
-
-        QTimer.singleShot(interval_ms, tick)
