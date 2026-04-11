@@ -8,6 +8,7 @@
 - ``typing``: 动态修改打字速度
 """
 
+import inspect
 from typing import Any
 
 from PySide6.QtCore import QTimer
@@ -119,9 +120,53 @@ class ScriptRunner:
             self._show_current_node()
             return
 
+        if node_type == "call":
+            self._run_call_node(node)
+            self.index += 1
+            self._show_current_node()
+            return
+
         # 未知节点直接跳过，避免卡死流程。
         self.index += 1
         self._show_current_node()
+
+    def _run_call_node(self, node: dict[str, Any]) -> None:
+        """Execute a Python callback node.
+
+        Supported keys:
+        - ``fn``
+        - ``callable``
+        - ``function``
+        """
+        callback = node.get("fn") or node.get("callable") or node.get("function")
+        if not callable(callback):
+            return
+
+        try:
+            signature = inspect.signature(callback)
+        except (TypeError, ValueError):
+            callback(self)
+            return
+
+        positional_count = 0
+        has_varargs = False
+        for parameter in signature.parameters.values():
+            if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+                has_varargs = True
+                continue
+            if parameter.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                positional_count += 1
+
+        if has_varargs or positional_count >= 2:
+            callback(self, node)
+            return
+        if positional_count == 1:
+            callback(self)
+            return
+        callback()
 
     def _start_typewriter(self, text: str) -> None:
         """开始一段 ``say`` 文本的逐字显示。"""

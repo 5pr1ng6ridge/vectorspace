@@ -220,3 +220,53 @@ python -m py_compile src/engine/**/*.py
   - 普通文本：推进到当前文本段末尾
   - 公式（`$...$` / `$$...$$`）：按整个公式块推进
 - 后续再次使用正数 `<speed .../>` 会退出该模式并恢复按字符推进。
+
+## 10. Python 场景脚本
+
+现在场景加载顺序为：
+1. `game/scripts/scenes/<scene_name>.py`
+2. `game/scripts/scenes/<scene_name>.json`（兼容旧格式）
+
+Python 场景模块支持以下入口（按优先级）：
+- `build_scene()` 函数
+- `SCENE`
+- `scene`
+- `SCRIPT`
+- `script`
+
+返回值支持两种形式：
+- 旧格式：`{"nodes": ..., "flow": ...}`
+- 线性格式：`{"id": "...", "defaults": {...}, "script": [...]}` 或直接 `[...]`
+
+线性格式的每一项可以是：
+- `dict` 节点（如 `{"type":"say", ...}`）
+- Python `callable`（会自动转换为 `{"type":"call", "fn": ...}`）
+
+`call` 节点说明：
+- `type="call"` 时，会执行 `fn` / `callable` / `function` 字段中的函数。
+- 回调可写成 `def fn(runner): ...` 或无参 `def fn(): ...`。
+- 可在回调中直接调用 `runner.view` 和 `runner` 方法实现复杂逻辑。
+
+可选：使用 `src/engine/script/api.py` 的 `SceneBuilder`：
+
+```python
+from src.engine.script.api import SceneBuilder
+
+def py_hook(runner):
+    runner.view.set_name("System")
+
+def build_scene():
+    builder = SceneBuilder(
+        "demo",
+        defaults={"typing": {"speed_ms": 30}},
+    )
+    return (
+        builder
+        .bg("bg_vstest.png")
+        .say("?", "Hello from Python scene")
+        .call(py_hook)
+        .typing(speed_ms=18)
+        .say("?", "Faster line")
+        .build()
+    )
+```
