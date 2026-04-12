@@ -1,19 +1,254 @@
-"""Python scene authoring helpers."""
+"""Python 场景脚本辅助。"""
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, Callable
 
 SceneNode = dict[str, Any]
 SceneCallable = Callable[..., Any]
+SceneLinearItem = SceneNode | SceneCallable
+SceneLinearScript = Iterable[SceneLinearItem]
+
+
+def bg(file: str) -> SceneNode:
+    return {"type": "bg", "file": file}
+
+
+def say(speaker: str, text: str) -> SceneNode:
+    return {"type": "say", "speaker": speaker, "text": text}
+
+
+def formula(latex: str) -> SceneNode:
+    return {"type": "formula", "latex": latex}
+
+
+def style(
+    *,
+    font_size: int | None = None,
+    color: str | None = None,
+    name_font_size: int | None = None,
+    name_color: str | None = None,
+) -> SceneNode:
+    node: SceneNode = {"type": "style"}
+    if font_size is not None:
+        node["font_size"] = int(font_size)
+    if color is not None:
+        node["color"] = color
+    if name_font_size is not None:
+        node["name_font_size"] = int(name_font_size)
+    if name_color is not None:
+        node["name_color"] = name_color
+    return node
+
+
+def typing(
+    *,
+    speed_ms: int | None = None,
+    cps: float | None = None,
+) -> SceneNode:
+    node: SceneNode = {"type": "typing"}
+    if speed_ms is not None:
+        node["speed_ms"] = int(speed_ms)
+    if cps is not None:
+        node["cps"] = float(cps)
+    return node
+
+
+def call(fn: SceneCallable) -> SceneNode:
+    return {"type": "call", "fn": fn}
+
+
+def image_register(
+    image_id: str,
+    file: str,
+    *,
+    folder: str | None = None,
+    x: float | None = None,
+    y: float | None = None,
+    scale: float | None = None,
+    opacity: float | None = None,
+    z: int | None = None,
+    anchor_x: float | None = None,
+    anchor_y: float | None = None,
+    visible: bool = False,
+) -> SceneNode:
+    node: SceneNode = {
+        "type": "image_register",
+        "id": image_id,
+        "file": file,
+        "visible": bool(visible),
+    }
+    if folder is not None:
+        node["folder"] = folder
+    if x is not None:
+        node["x"] = float(x)
+    if y is not None:
+        node["y"] = float(y)
+    if scale is not None:
+        node["scale"] = float(scale)
+    if opacity is not None:
+        node["opacity"] = float(opacity)
+    if z is not None:
+        node["z"] = int(z)
+    if anchor_x is not None:
+        node["anchor_x"] = float(anchor_x)
+    if anchor_y is not None:
+        node["anchor_y"] = float(anchor_y)
+    return node
+
+
+def image_show(
+    image_id: str,
+    *,
+    file: str | None = None,
+    folder: str | None = None,
+    x: float | None = None,
+    y: float | None = None,
+    dx: float | None = None,
+    dy: float | None = None,
+    scale: float | None = None,
+    dscale: float | None = None,
+    opacity: float | None = None,
+    dopacity: float | None = None,
+    z: int | None = None,
+    duration_ms: int | None = None,
+    easing: str | None = None,
+    wait: bool = False,
+) -> SceneNode:
+    node: SceneNode = {
+        "type": "image_show",
+        "id": image_id,
+        "wait": bool(wait),
+    }
+    if file is not None:
+        node["file"] = file
+    if folder is not None:
+        node["folder"] = folder
+    if x is not None:
+        node["x"] = float(x)
+    if y is not None:
+        node["y"] = float(y)
+    if dx is not None:
+        node["dx"] = float(dx)
+    if dy is not None:
+        node["dy"] = float(dy)
+    if scale is not None:
+        node["scale"] = float(scale)
+    if dscale is not None:
+        node["dscale"] = float(dscale)
+    if opacity is not None:
+        node["opacity"] = float(opacity)
+    if dopacity is not None:
+        node["dopacity"] = float(dopacity)
+    if z is not None:
+        node["z"] = int(z)
+    if duration_ms is not None:
+        node["duration_ms"] = int(duration_ms)
+    if easing is not None:
+        node["easing"] = easing
+    return node
+
+
+def image_hide(
+    image_id: str,
+    *,
+    dx: float | None = None,
+    dy: float | None = None,
+    dscale: float | None = None,
+    opacity: float | None = None,
+    duration_ms: int | None = None,
+    easing: str | None = None,
+    wait: bool = False,
+    remove: bool = False,
+) -> SceneNode:
+    node: SceneNode = {
+        "type": "image_hide",
+        "id": image_id,
+        "wait": bool(wait),
+        "remove": bool(remove),
+    }
+    if dx is not None:
+        node["dx"] = float(dx)
+    if dy is not None:
+        node["dy"] = float(dy)
+    if dscale is not None:
+        node["dscale"] = float(dscale)
+    if opacity is not None:
+        node["opacity"] = float(opacity)
+    if duration_ms is not None:
+        node["duration_ms"] = int(duration_ms)
+    if easing is not None:
+        node["easing"] = easing
+    return node
+
+
+def image_transform(
+    image_id: str,
+    *,
+    x: float | None = None,
+    y: float | None = None,
+    dx: float | None = None,
+    dy: float | None = None,
+    scale: float | None = None,
+    dscale: float | None = None,
+    opacity: float | None = None,
+    dopacity: float | None = None,
+    z: int | None = None,
+    duration_ms: int | None = None,
+    easing: str | None = None,
+    wait: bool = False,
+) -> SceneNode:
+    node: SceneNode = {
+        "type": "image_transform",
+        "id": image_id,
+        "wait": bool(wait),
+    }
+    if x is not None:
+        node["x"] = float(x)
+    if y is not None:
+        node["y"] = float(y)
+    if dx is not None:
+        node["dx"] = float(dx)
+    if dy is not None:
+        node["dy"] = float(dy)
+    if scale is not None:
+        node["scale"] = float(scale)
+    if dscale is not None:
+        node["dscale"] = float(dscale)
+    if opacity is not None:
+        node["opacity"] = float(opacity)
+    if dopacity is not None:
+        node["dopacity"] = float(dopacity)
+    if z is not None:
+        node["z"] = int(z)
+    if duration_ms is not None:
+        node["duration_ms"] = int(duration_ms)
+    if easing is not None:
+        node["easing"] = easing
+    return node
+
+
+def image_remove(image_id: str) -> SceneNode:
+    return {"type": "image_remove", "id": image_id}
+
+
+def image_clear() -> SceneNode:
+    return {"type": "image_clear"}
+
+
+def scene(
+    scene_id: str,
+    script: SceneLinearScript,
+    *,
+    defaults: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """构造标准场景字典。"""
+    return {"id": scene_id, "defaults": dict(defaults or {}), "script": script}
 
 
 class SceneBuilder:
-    """Build a scene using a linear Python DSL.
-
-    The result is a dict with ``id``, ``defaults`` and ``script``.
-    Loader will normalize ``script`` into runner-compatible ``nodes/flow``.
-    """
+    """线性 DSL 构建器，保留兼容。"""
 
     def __init__(
         self,
@@ -22,20 +257,20 @@ class SceneBuilder:
     ) -> None:
         self._scene_id = scene_id
         self._defaults = dict(defaults or {})
-        self._script: list[SceneNode | SceneCallable] = []
+        self._script: list[SceneLinearItem] = []
 
-    def add(self, node: SceneNode | SceneCallable) -> "SceneBuilder":
+    def add(self, node: SceneLinearItem) -> "SceneBuilder":
         self._script.append(node)
         return self
 
     def bg(self, file: str) -> "SceneBuilder":
-        return self.add({"type": "bg", "file": file})
+        return self.add(bg(file))
 
     def say(self, speaker: str, text: str) -> "SceneBuilder":
-        return self.add({"type": "say", "speaker": speaker, "text": text})
+        return self.add(say(speaker, text))
 
     def formula(self, latex: str) -> "SceneBuilder":
-        return self.add({"type": "formula", "latex": latex})
+        return self.add(formula(latex))
 
     def style(
         self,
@@ -45,16 +280,14 @@ class SceneBuilder:
         name_font_size: int | None = None,
         name_color: str | None = None,
     ) -> "SceneBuilder":
-        node: SceneNode = {"type": "style"}
-        if font_size is not None:
-            node["font_size"] = int(font_size)
-        if color is not None:
-            node["color"] = color
-        if name_font_size is not None:
-            node["name_font_size"] = int(name_font_size)
-        if name_color is not None:
-            node["name_color"] = name_color
-        return self.add(node)
+        return self.add(
+            style(
+                font_size=font_size,
+                color=color,
+                name_font_size=name_font_size,
+                name_color=name_color,
+            )
+        )
 
     def typing(
         self,
@@ -62,19 +295,148 @@ class SceneBuilder:
         speed_ms: int | None = None,
         cps: float | None = None,
     ) -> "SceneBuilder":
-        node: SceneNode = {"type": "typing"}
-        if speed_ms is not None:
-            node["speed_ms"] = int(speed_ms)
-        if cps is not None:
-            node["cps"] = float(cps)
-        return self.add(node)
+        return self.add(typing(speed_ms=speed_ms, cps=cps))
 
     def call(self, fn: SceneCallable) -> "SceneBuilder":
-        return self.add({"type": "call", "fn": fn})
+        return self.add(call(fn))
+
+    def image_register(
+        self,
+        image_id: str,
+        file: str,
+        *,
+        folder: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
+        scale: float | None = None,
+        opacity: float | None = None,
+        z: int | None = None,
+        anchor_x: float | None = None,
+        anchor_y: float | None = None,
+        visible: bool = False,
+    ) -> "SceneBuilder":
+        return self.add(
+            image_register(
+                image_id,
+                file,
+                folder=folder,
+                x=x,
+                y=y,
+                scale=scale,
+                opacity=opacity,
+                z=z,
+                anchor_x=anchor_x,
+                anchor_y=anchor_y,
+                visible=visible,
+            )
+        )
+
+    def image_show(
+        self,
+        image_id: str,
+        *,
+        file: str | None = None,
+        folder: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
+        dx: float | None = None,
+        dy: float | None = None,
+        scale: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        dopacity: float | None = None,
+        z: int | None = None,
+        duration_ms: int | None = None,
+        easing: str | None = None,
+        wait: bool = False,
+    ) -> "SceneBuilder":
+        return self.add(
+            image_show(
+                image_id,
+                file=file,
+                folder=folder,
+                x=x,
+                y=y,
+                dx=dx,
+                dy=dy,
+                scale=scale,
+                dscale=dscale,
+                opacity=opacity,
+                dopacity=dopacity,
+                z=z,
+                duration_ms=duration_ms,
+                easing=easing,
+                wait=wait,
+            )
+        )
+
+    def image_hide(
+        self,
+        image_id: str,
+        *,
+        dx: float | None = None,
+        dy: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        duration_ms: int | None = None,
+        easing: str | None = None,
+        wait: bool = False,
+        remove: bool = False,
+    ) -> "SceneBuilder":
+        return self.add(
+            image_hide(
+                image_id,
+                dx=dx,
+                dy=dy,
+                dscale=dscale,
+                opacity=opacity,
+                duration_ms=duration_ms,
+                easing=easing,
+                wait=wait,
+                remove=remove,
+            )
+        )
+
+    def image_transform(
+        self,
+        image_id: str,
+        *,
+        x: float | None = None,
+        y: float | None = None,
+        dx: float | None = None,
+        dy: float | None = None,
+        scale: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        dopacity: float | None = None,
+        z: int | None = None,
+        duration_ms: int | None = None,
+        easing: str | None = None,
+        wait: bool = False,
+    ) -> "SceneBuilder":
+        return self.add(
+            image_transform(
+                image_id,
+                x=x,
+                y=y,
+                dx=dx,
+                dy=dy,
+                scale=scale,
+                dscale=dscale,
+                opacity=opacity,
+                dopacity=dopacity,
+                z=z,
+                duration_ms=duration_ms,
+                easing=easing,
+                wait=wait,
+            )
+        )
+
+    def image_remove(self, image_id: str) -> "SceneBuilder":
+        return self.add(image_remove(image_id))
+
+    def image_clear(self) -> "SceneBuilder":
+        return self.add(image_clear())
 
     def build(self) -> dict[str, Any]:
-        return {
-            "id": self._scene_id,
-            "defaults": dict(self._defaults),
-            "script": list(self._script),
-        }
+        return scene(self._scene_id, list(self._script), defaults=self._defaults)

@@ -1,12 +1,6 @@
-"""脚本执行器。
+"""脚本执行器。"""
 
-支持节点类型:
-- ``say``: 对话文本（打字机效果 + 支持内联公式/标签）
-- ``formula``: 独立公式块
-- ``bg``: 背景切换（立即生效，不等待点击）
-- ``style``: 动态修改字号/颜色
-- ``typing``: 动态修改打字速度
-"""
+from __future__ import annotations
 
 import inspect
 from typing import Any
@@ -33,6 +27,7 @@ class ScriptRunner:
         self.index = 0
         self.waiting_for_click = False
         self.typing = False
+        self.waiting_for_node_animation = False
 
         # 打字机状态
         self.current_segments: list[DialogueSegment] = []
@@ -60,6 +55,10 @@ class ScriptRunner:
 
     def start(self) -> None:
         self.index = 0
+        self.waiting_for_click = False
+        self.typing = False
+        self.waiting_for_node_animation = False
+        self.waiting_for_pause = False
         self._show_current_node()
 
     def _show_current_node(self) -> None:
@@ -69,6 +68,7 @@ class ScriptRunner:
             self.view.show_text("(没有了喵，再点也不会有反应的喵)")
             self.waiting_for_click = False
             self.typing = False
+            self.waiting_for_node_animation = False
             self.waiting_for_pause = False
             self.type_timer.stop()
             self.pause_timer.stop()
@@ -126,18 +126,51 @@ class ScriptRunner:
             self._show_current_node()
             return
 
-        # 未知节点直接跳过，避免卡死流程。
+        if node_type == "image_register":
+            self._run_image_register_node(node)
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type == "image_show":
+            if self._run_image_show_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type == "image_hide":
+            if self._run_image_hide_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type == "image_transform":
+            if self._run_image_transform_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type == "image_remove":
+            self._run_image_remove_node(node)
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type == "image_clear":
+            self.view.clear_images()
+            self.index += 1
+            self._show_current_node()
+            return
+
+        # 未知节点直接跳过，避免流程卡住。
         self.index += 1
         self._show_current_node()
 
     def _run_call_node(self, node: dict[str, Any]) -> None:
-        """Execute a Python callback node.
-
-        Supported keys:
-        - ``fn``
-        - ``callable``
-        - ``function``
-        """
+        """执行 Python 回调节点。"""
         callback = node.get("fn") or node.get("callable") or node.get("function")
         if not callable(callback):
             return
@@ -168,8 +201,137 @@ class ScriptRunner:
             return
         callback()
 
+    def _run_image_register_node(self, node: dict[str, Any]) -> None:
+        image_id = self._read_str(node, "id", "image_id", "sprite_id", "name", "key")
+        file = self._read_str(node, "file", "path", "src")
+        if image_id is None or file is None:
+            return
+
+        self.view.register_image(
+            image_id=image_id,
+            file=file,
+            folder=self._read_str(node, "folder", "dir"),
+            x=self._read_float(node, "x"),
+            y=self._read_float(node, "y"),
+            scale=self._read_float(node, "scale"),
+            opacity=self._read_float(node, "opacity", "alpha"),
+            z=self._read_int(node, "z"),
+            anchor_x=self._read_float(node, "anchor_x"),
+            anchor_y=self._read_float(node, "anchor_y"),
+            visible=self._read_bool(node, "visible", "show", default=False),
+        )
+
+    def _run_image_show_node(self, node: dict[str, Any]) -> bool:
+        image_id = self._read_str(node, "id", "image_id", "sprite_id", "name", "key")
+        if image_id is None:
+            return False
+
+        wait = self._read_bool(node, "wait", "blocking", "block", default=False)
+        duration_ms = self._read_int(
+            node, "duration_ms", "duration", "time_ms", "time", "ms"
+        )
+        if duration_ms is None:
+            duration_ms = 0
+
+        pending = self.view.show_image(
+            image_id=image_id,
+            file=self._read_str(node, "file", "path", "src"),
+            folder=self._read_str(node, "folder", "dir"),
+            x=self._read_float(node, "x"),
+            y=self._read_float(node, "y"),
+            dx=self._read_float(node, "dx"),
+            dy=self._read_float(node, "dy"),
+            scale=self._read_float(node, "scale"),
+            dscale=self._read_float(node, "dscale"),
+            opacity=self._read_float(node, "opacity", "alpha"),
+            dopacity=self._read_float(node, "dopacity", "dalpha"),
+            z=self._read_int(node, "z"),
+            duration_ms=max(0, int(duration_ms)),
+            easing=self._read_str(node, "easing", "ease") or "linear",
+            on_finished=self._resume_after_node_animation if wait else None,
+        )
+
+        if wait and pending:
+            self.waiting_for_node_animation = True
+            return True
+        return False
+
+    def _run_image_hide_node(self, node: dict[str, Any]) -> bool:
+        image_id = self._read_str(node, "id", "image_id", "sprite_id", "name", "key")
+        if image_id is None:
+            return False
+
+        wait = self._read_bool(node, "wait", "blocking", "block", default=False)
+        duration_ms = self._read_int(
+            node, "duration_ms", "duration", "time_ms", "time", "ms"
+        )
+        if duration_ms is None:
+            duration_ms = 0
+
+        pending = self.view.hide_image(
+            image_id=image_id,
+            dx=self._read_float(node, "dx"),
+            dy=self._read_float(node, "dy"),
+            dscale=self._read_float(node, "dscale"),
+            opacity=self._read_float(node, "opacity", "alpha"),
+            duration_ms=max(0, int(duration_ms)),
+            easing=self._read_str(node, "easing", "ease") or "linear",
+            remove=self._read_bool(node, "remove", "delete", default=False),
+            on_finished=self._resume_after_node_animation if wait else None,
+        )
+
+        if wait and pending:
+            self.waiting_for_node_animation = True
+            return True
+        return False
+
+    def _run_image_transform_node(self, node: dict[str, Any]) -> bool:
+        image_id = self._read_str(node, "id", "image_id", "sprite_id", "name", "key")
+        if image_id is None:
+            return False
+
+        wait = self._read_bool(node, "wait", "blocking", "block", default=False)
+        duration_ms = self._read_int(
+            node, "duration_ms", "duration", "time_ms", "time", "ms"
+        )
+        if duration_ms is None:
+            duration_ms = 0
+
+        pending = self.view.transform_image(
+            image_id=image_id,
+            x=self._read_float(node, "x"),
+            y=self._read_float(node, "y"),
+            dx=self._read_float(node, "dx"),
+            dy=self._read_float(node, "dy"),
+            scale=self._read_float(node, "scale"),
+            dscale=self._read_float(node, "dscale"),
+            opacity=self._read_float(node, "opacity", "alpha"),
+            dopacity=self._read_float(node, "dopacity", "dalpha"),
+            z=self._read_int(node, "z"),
+            duration_ms=max(0, int(duration_ms)),
+            easing=self._read_str(node, "easing", "ease") or "linear",
+            on_finished=self._resume_after_node_animation if wait else None,
+        )
+
+        if wait and pending:
+            self.waiting_for_node_animation = True
+            return True
+        return False
+
+    def _run_image_remove_node(self, node: dict[str, Any]) -> None:
+        image_id = self._read_str(node, "id", "image_id", "sprite_id", "name", "key")
+        if image_id is None:
+            return
+        self.view.remove_image(image_id)
+
+    def _resume_after_node_animation(self) -> None:
+        if not self.waiting_for_node_animation:
+            return
+        self.waiting_for_node_animation = False
+        self.index += 1
+        self._show_current_node()
+
     def _start_typewriter(self, text: str) -> None:
-        """开始一段 ``say`` 文本的逐字显示。"""
         self.current_segments = parse_dialogue_segments(text)
         self.current_total_units = count_reveal_units(self.current_segments)
         self.current_index = 0
@@ -235,7 +397,6 @@ class ScriptRunner:
         self.type_timer.start(self.current_interval_ms_effective)
 
     def _try_pause_at_current_index(self) -> bool:
-        """若当前位置命中 pause 点，则停下并等待一段时间。"""
         if self.current_pause_cursor >= len(self.current_pause_points):
             return False
 
@@ -250,7 +411,6 @@ class ScriptRunner:
         return True
 
     def _jump_to_next_pause_or_finish(self) -> None:
-        """点击时：跳到同节点下一个 pause；若不存在则直接补全本句。"""
         self.pause_timer.stop()
         self.waiting_for_pause = False
 
@@ -285,7 +445,6 @@ class ScriptRunner:
         self.view.show_text_segments(self.current_segments)
 
     def _advance_reveal_progress(self, current_index: int) -> int:
-        """按当前 speed 模式推进 reveal 进度。"""
         if self.current_step_by_unit:
             return self._next_unit_boundary_after(current_index)
         return min(self.current_total_units, current_index + 1)
@@ -297,7 +456,6 @@ class ScriptRunner:
         return self.current_total_units
 
     def _apply_speed_changes_up_to_current_index(self) -> None:
-        """将当前位置之前（含当前位置）的 speed 指令应用到当前打字间隔。"""
         changed = False
         while self.current_speed_cursor < len(self.current_speed_points):
             unit_index, interval_ms = self.current_speed_points[self.current_speed_cursor]
@@ -316,7 +474,6 @@ class ScriptRunner:
 
     @staticmethod
     def _collect_pause_points(segments: list[DialogueSegment]) -> list[tuple[int, int]]:
-        """收集当前 say 中的 pause 点，格式为 (reveal_unit_index, duration_ms)。"""
         points: list[tuple[int, int]] = []
         unit_index = 0
 
@@ -347,7 +504,6 @@ class ScriptRunner:
 
     @staticmethod
     def _collect_speed_points(segments: list[DialogueSegment]) -> list[tuple[int, int]]:
-        """收集当前 say 中的 speed 点，格式为 (reveal_unit_index, interval_ms)。"""
         points: list[tuple[int, int]] = []
         unit_index = 0
 
@@ -380,7 +536,6 @@ class ScriptRunner:
 
     @staticmethod
     def _collect_unit_boundaries(segments: list[DialogueSegment]) -> list[int]:
-        """收集“完整单位”的结束边界，用于 <speed -1/> 模式。"""
         boundaries: list[int] = []
         unit_index = 0
 
@@ -398,13 +553,11 @@ class ScriptRunner:
         return boundaries
 
     def _on_advance_requested(self) -> None:
-        """点击推进。
-
-        1. 正在打字 -> 跳到本节点下一个停顿；若无停顿则直接补全本句
-        2. 已显示完成 -> 前进到下一个节点
-        """
         if self.typing:
             self._jump_to_next_pause_or_finish()
+            return
+
+        if self.waiting_for_node_animation:
             return
 
         if self.waiting_for_click:
@@ -413,7 +566,6 @@ class ScriptRunner:
             self._show_current_node()
 
     def _apply_defaults(self) -> None:
-        """应用场景级默认配置 ``defaults``。"""
         defaults = self.script_data.get("defaults", {})
         if not isinstance(defaults, dict):
             return
@@ -427,14 +579,6 @@ class ScriptRunner:
             self._apply_typing_node(typing_defaults)
 
     def _apply_style_node(self, node: dict[str, Any]) -> None:
-        """应用样式节点。
-
-        支持字段:
-        - ``font_size`` / ``text_size``
-        - ``color`` / ``text_color``
-        - ``name_font_size`` / ``name_size``
-        - ``name_color``
-        """
         font_size = self._read_int(node, "font_size", "text_size")
         color = self._read_str(node, "color", "text_color")
         name_font_size = self._read_int(node, "name_font_size", "name_size")
@@ -448,12 +592,6 @@ class ScriptRunner:
         )
 
     def _apply_typing_node(self, node: dict[str, Any]) -> None:
-        """应用打字速度节点。
-
-        支持字段:
-        - ``speed_ms`` / ``type_interval_ms`` / ``interval_ms``
-        - ``cps`` / ``chars_per_second``（优先转换为 ms）
-        """
         interval_ms = self._read_int(
             node, "speed_ms", "type_interval_ms", "interval_ms"
         )
@@ -517,3 +655,19 @@ class ScriptRunner:
                 except ValueError:
                     continue
         return None
+
+    @staticmethod
+    def _read_bool(node: dict[str, Any], *keys: str, default: bool = False) -> bool:
+        for key in keys:
+            value = node.get(key)
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"1", "true", "yes", "on"}:
+                    return True
+                if normalized in {"0", "false", "no", "off"}:
+                    return False
+        return default

@@ -4,12 +4,12 @@
 
 - `src/engine/app.py`: 应用入口，初始化资源根目录和默认字体。
 - `src/engine/window.py`: 主窗口装配 `GameView` 与 `SceneManager`。
-- `src/engine/scene_manager.py`: 根据场景名加载脚本并启动执行器。
-- `src/engine/script/loader.py`: 读取 JSON 脚本。
+- `src/engine/scene_manager.py`: 根据场景名加载 Python 场景脚本并启动执行器。
+- `src/engine/script/loader.py`: 读取并规范化 Python 场景脚本。
 - `src/engine/script/runner.py`: 核心流程执行（节点调度、打字机、样式与速度）。
 - `src/engine/ui/game_view.py`: 画面层与点击推进事件。
 - `src/engine/ui/dialogue_text.py`: Web 对话渲染（KaTeX、动画标签、复制拦截）。
-- `game/scripts/scenes/*.json`: 场景脚本。
+- `game/scripts/scenes/*.py`: 场景脚本。
 - `game/assets/*`: 背景、字体、UI、KaTeX 离线资源。
 
 ## 2. 场景脚本格式
@@ -223,9 +223,8 @@ python -m py_compile src/engine/**/*.py
 
 ## 10. Python 场景脚本
 
-现在场景加载顺序为：
-1. `game/scripts/scenes/<scene_name>.py`
-2. `game/scripts/scenes/<scene_name>.json`（兼容旧格式）
+当前仅支持 Python 场景文件：
+- `game/scripts/scenes/<scene_name>.py`
 
 Python 场景模块支持以下入口（按优先级）：
 - `build_scene()` 函数
@@ -234,26 +233,31 @@ Python 场景模块支持以下入口（按优先级）：
 - `SCRIPT`
 - `script`
 
-返回值支持两种形式：
-- 旧格式：`{"nodes": ..., "flow": ...}`
-- 线性格式：`{"id": "...", "defaults": {...}, "script": [...]}` 或直接 `[...]`
+返回值支持：
+- 图结构：`{"nodes": ..., "flow": ...}`
+- 线性结构：`{"id": "...", "defaults": {...}, "script": [...]}`
+- 直接线性列表：`[...]`
 
-线性格式的每一项可以是：
-- `dict` 节点（如 `{"type":"say", ...}`）
-- Python `callable`（会自动转换为 `{"type":"call", "fn": ...}`）
+线性结构每一项可以是：
+- `dict` 节点（如 `{"type": "say", ...}`）
+- Python `callable`（自动转成 `{"type": "call", "fn": ...}`）
 
 `call` 节点说明：
-- `type="call"` 时，会执行 `fn` / `callable` / `function` 字段中的函数。
-- 回调可写成 `def fn(runner): ...` 或无参 `def fn(): ...`。
-- 可在回调中直接调用 `runner.view` 和 `runner` 方法实现复杂逻辑。
+- `type="call"` 时，执行 `fn` / `callable` / `function` 字段对应函数。
+- 回调支持以下签名：
+  - `def fn()`
+  - `def fn(runner)`
+  - `def fn(runner, node)`
 
 可选：使用 `src/engine/script/api.py` 的 `SceneBuilder`：
 
 ```python
 from src.engine.script.api import SceneBuilder
 
+
 def py_hook(runner):
     runner.view.set_name("System")
+
 
 def build_scene():
     builder = SceneBuilder(
@@ -269,4 +273,131 @@ def build_scene():
         .say("?", "Faster line")
         .build()
     )
+```
+
+## 11. Generator 场景脚本（推荐）
+
+推荐直接用 `yield` 产出节点，而不是手写 `nodes/flow`：
+
+```python
+from src.engine.script.api import bg, say, style, typing
+
+SCENE_ID = "demo"
+DEFAULTS = {
+    "typing": {"speed_ms": 30},
+    "style": {"font_size": 33, "color": "#FFFFFF"},
+}
+
+
+def query_count() -> int:
+    return 3
+
+
+def build_scene():
+    yield bg("bg_vstest.png")
+
+    # 可以直接写 Python 分支
+    if query_count() > 0:
+        yield say("System", "进入循环演示")
+
+    # 可以直接写 for/while
+    for i in range(query_count()):
+        yield say("?", f"第 {i + 1} 句")
+
+    n = 2
+    while n > 0:
+        yield say("?", f"while 倒计时 {n}")
+        n -= 1
+
+    yield typing(speed_ms=18)
+    yield style(color="#F5A9B8")
+    yield say("?", "后续文本会使用新速度和样式")
+```
+
+说明：
+
+- `loader` 会自动把 generator 产出的线性节点规范化为 `nodes/flow`，无需手动转换。
+- 若需要默认配置，可在模块顶层定义 `SCENE_ID`、`DEFAULTS`。
+- `build_scene()` 也可以返回 `dict`（`{"id":..., "defaults":..., "script": ...}`）或现成 `nodes/flow`。
+
+## 12. 图片/立绘系统
+
+脚本节点新增：
+
+- `image_register`：注册图片资源与初始状态（默认不显示）
+- `image_show`：显示图片，可附带位移/缩放/透明度动画
+- `image_hide`：隐藏图片，可附带淡出/位移动画
+- `image_transform`：仅做变换（位置、缩放、透明度、Z）
+- `image_remove`：移除单个图片
+- `image_clear`：清空所有图片
+
+层级约定：
+
+- 背景始终最下层
+- 立绘图片层位于背景之上
+- UI（对话框、姓名、文本）始终在立绘层之上
+
+### 12.1 常用字段
+
+通用 id 字段：`id`（兼容 `image_id` / `sprite_id` / `name`）
+
+常用变换字段：
+
+- 绝对位置：`x`, `y`
+- 相对位移：`dx`, `dy`
+- 缩放：`scale`（绝对）, `dscale`（相对）
+- 透明度：`opacity`（绝对）, `dopacity`（相对）
+- 层级：`z`
+- 缓动：`easing`
+- 时长：`duration_ms`
+- 是否阻塞流程：`wait`（`true` 时等待动画完成后再进入下一节点）
+
+`easing` 支持示例：
+
+- `linear`, `in_quad`, `out_quad`, `in_out_quad`
+- `in_cubic`, `out_cubic`, `in_out_cubic`
+- `in_sine`, `out_sine`, `in_out_sine`
+- `in_back`, `out_back`, `in_out_back`
+- `out_bounce`, `in_out_bounce`, `out_elastic`
+
+### 12.2 Generator 写法示例
+
+```python
+from src.engine.script.api import (
+    bg,
+    say,
+    image_register,
+    image_show,
+    image_transform,
+    image_hide,
+)
+
+
+def build_scene():
+    yield bg("line1.png")
+    yield image_register(
+        "alice",
+        "char_alice.png",
+        folder="VECTORSPACE_pic",
+        x=960,
+        y=1040,
+        scale=0.82,
+        z=10,
+    )
+    yield image_show(
+        "alice",
+        opacity=1.0,
+        duration_ms=260,
+        easing="out_quad",
+        wait=True,
+    )
+    yield say("Alice", "我出场了。")
+    yield image_transform(
+        "alice",
+        dx=-140,
+        dscale=0.05,
+        duration_ms=220,
+        easing="in_out_sine",
+    )
+    yield image_hide("alice", duration_ms=180, easing="in_quad")
 ```

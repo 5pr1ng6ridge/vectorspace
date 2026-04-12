@@ -1,28 +1,51 @@
-"""Prologue scene (Python entry).
+﻿"""序章场景脚本（Generator 版）。
 
-Current strategy:
-- Keep reading `prologue.json` to preserve existing content.
-- Allow adding Python logic here incrementally (call nodes, dynamic branching, etc).
+说明：
+- 内容由 `prologue.json` 迁移而来。
+- 使用 `yield` 逐条产出节点，便于直接写 if/for/while 与函数返回值分支。
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any
+from collections.abc import Iterator
+
+from src.engine.script.api import SceneLinearItem, bg, say, style, typing
+
+SCENE_ID = "prologue"
+DEFAULTS = {
+    "style": {
+        "name_font_size": 27,
+        "font_size": 33,
+        "color": "#F5A9B8",
+        "name_color": "#FFFFFF",
+    },
+    "typing": {"speed_ms": 30},
+}
 
 
-def build_scene() -> dict[str, Any]:
-    json_path = Path(__file__).with_suffix(".json")
-    with json_path.open("r", encoding="utf-8") as f:
-        scene_data: dict[str, Any] = json.load(f)
-
-    # Example: inject Python callable node into existing flow.
-    #
-    # def on_enter(runner) -> None:
-    #     runner.view.set_name("System")
-    #
-    # scene_data["nodes"]["py_hook"] = {"type": "call", "fn": on_enter}
-    # scene_data["flow"].insert(0, "py_hook")
-
-    return scene_data
+def build_scene() -> Iterator[SceneLinearItem]:
+    """按顺序产出场景节点。"""
+    yield bg("line1.png")
+    yield say(
+        "ヨミビトシラズ",
+        "在不计其数的<span style=\"color: white;\"><i>archive</i></span>之上  在半径25cm的窗户上  注视着你 <pause ms=\"500\"/><h1 style=\"font-size:30px;\"><i><epsilon>掃いて捨てるほどの記録の上  半径25cmの窓で  きみを見ている  </epsilon></i></h1>",
+    )
+    yield style(font_size=43, color="#F5A9B8", name_font_size=40, name_color="#FFFFFF")
+    yield say(
+        "?",
+        "ciallo~<shake><rainbow>这是一行测试文本这是一行测试文本</rainbow></shake>$f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本！@#￥%……&*（",
+    )
+    yield style(font_size=43, color="#F5A9B8", name_font_size=40, name_color="#FFFFFF")
+    yield say("?", "这是<epsilon>$f(x) = f(a) + f'(a)(x-a) + \\frac{f''(a)}{2!}(x-a)^2...$</epsilon>")
+    yield say("?", "$\\mathcal{L}\\{f(t)\\} = F(s) = \\int_0^\\infty f(t)e^{-st}\\,dt $喵")
+    yield say(
+        "?",
+        "这里可以放矩阵。<mt style=\"font-size:30px;\">$$\\begin{pmatrix} a & b & c \\\\ e & f & g \\\\ i & j & k \\end{pmatrix} $$</mt>",
+    )
+    yield say("?", "by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?")
+    yield typing(speed_ms=3)
+    yield style(font_size=27, color="#FF0000", name_font_size=40, name_color="#FF0000")
+    yield say(
+        "",
+        "I feel that my δ is very serious. What should I do? I feel that I am a person with a very serious δ. It's because a+b is rather fragmented, and there are no orthogonal bases around me. So I feel like I am a strange matrix in the solution space. Therefore, when new vectors appear around me, many of the other party's linear transformations might just be due to unit orthogonalization.",
+    )

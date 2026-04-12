@@ -1,19 +1,83 @@
-"""游戏主视图。
+"""游戏主视图。"""
 
-图层顺序:
-1. 背景图层
-2. 角色层（预留）
-3. 对话框 UI 贴图
-4. 姓名框
-5. 对话文本（WebView）
-"""
+from __future__ import annotations
 
-from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QFont, QFontDatabase, QMouseEvent, QPixmap
-from PySide6.QtWidgets import QLabel, QWidget
+from dataclasses import dataclass
+from pathlib import Path
+import time
+from typing import Callable
+
+from PySide6.QtCore import QEasingCurve, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QFontDatabase, QKeyEvent, QMouseEvent, QPixmap
+from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QWidget
 
 from ..resources.paths import asset_path
 from .dialogue_text import DialogueSegment, DialogueTextView
+
+
+_IMAGE_SEARCH_FOLDERS = (
+    "characters",
+    "sprites",
+    "standing",
+    "portrait",
+    "VECTORSPACE_pic",
+    "ui",
+)
+
+_EASING_MAP: dict[str, QEasingCurve.Type] = {
+    "linear": QEasingCurve.Type.Linear,
+    "in_quad": QEasingCurve.Type.InQuad,
+    "out_quad": QEasingCurve.Type.OutQuad,
+    "in_out_quad": QEasingCurve.Type.InOutQuad,
+    "in_cubic": QEasingCurve.Type.InCubic,
+    "out_cubic": QEasingCurve.Type.OutCubic,
+    "in_out_cubic": QEasingCurve.Type.InOutCubic,
+    "in_sine": QEasingCurve.Type.InSine,
+    "out_sine": QEasingCurve.Type.OutSine,
+    "in_out_sine": QEasingCurve.Type.InOutSine,
+    "in_back": QEasingCurve.Type.InBack,
+    "out_back": QEasingCurve.Type.OutBack,
+    "in_out_back": QEasingCurve.Type.InOutBack,
+    "out_bounce": QEasingCurve.Type.OutBounce,
+    "in_out_bounce": QEasingCurve.Type.InOutBounce,
+    "out_elastic": QEasingCurve.Type.OutElastic,
+}
+
+
+@dataclass
+class _SpriteState:
+    image_id: str
+    label: QLabel
+    opacity_effect: QGraphicsOpacityEffect
+    pixmap: QPixmap
+    source: str
+    x: float = 960.0
+    y: float = 1080.0
+    scale: float = 1.0
+    opacity: float = 1.0
+    z: int = 0
+    anchor_x: float = 0.5
+    anchor_y: float = 1.0
+    visible: bool = False
+
+
+@dataclass
+class _SpriteAnimation:
+    image_id: str
+    started_at: float
+    duration_ms: int
+    easing: QEasingCurve
+    from_x: float
+    from_y: float
+    from_scale: float
+    from_opacity: float
+    to_x: float
+    to_y: float
+    to_scale: float
+    to_opacity: float
+    hide_on_finish: bool
+    remove_on_finish: bool
+    on_finished: Callable[[], None] | None
 
 
 class GameView(QWidget):
@@ -31,13 +95,12 @@ class GameView(QWidget):
         self.scene_bg.setScaledContents(True)
         self._bg_pixmap = QPixmap()
 
+        self.sprite_root = QWidget(self)
+        self.sprite_root.setAttribute(Qt.WA_TranslucentBackground)
+
         self.ui_overlay = QLabel(self)
         self.ui_overlay.setScaledContents(True)
         self._ui_pixmap = QPixmap(str(asset_path("ui", "dial_box_overlay.png")))
-
-        self.char_layer = QLabel(self)
-        self.char_layer.setScaledContents(True)
-        self.char_layer.setAttribute(Qt.WA_TranslucentBackground)
 
         self.name_label = QLabel(self)
         self.name_label.setAttribute(Qt.WA_TranslucentBackground)
@@ -45,21 +108,26 @@ class GameView(QWidget):
 
         self.text_label = DialogueTextView(self)
         self.text_label.setAttribute(Qt.WA_TranslucentBackground)
-        # 点击交给父级处理，保证点击对话区域也能推进流程。
         self.text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+        self._sprites: dict[str, _SpriteState] = {}
+        self._sprite_anims: dict[str, _SpriteAnimation] = {}
+        self._anim_timer = QTimer(self)
+        self._anim_timer.setInterval(16)
+        self._anim_timer.timeout.connect(self._on_sprite_anim_tick)
 
         self._apply_fonts()
         self._setup_z_order()
 
     def _setup_z_order(self) -> None:
         self.scene_bg.lower()
-        self.char_layer.raise_()
+        self.sprite_root.raise_()
         self.ui_overlay.raise_()
         self.name_label.raise_()
         self.text_label.raise_()
 
     def _apply_fonts(self) -> None:
-        """加载像素字体并应用到姓名框/对话框。"""
+        """加载像素字体并应用到姓名框和对话框。"""
         font_path = asset_path("fonts", "fusion-pixel-12px-monospaced-zh_hans.ttf")
         font_id = QFontDatabase.addApplicationFont(str(font_path))
         if font_id == -1:
@@ -83,7 +151,6 @@ class GameView(QWidget):
         name_font_size: int | None = None,
         name_color: str | None = None,
     ) -> None:
-        """更新对话与姓名框样式（供 ``style`` 节点调用）。"""
         if name_font_size is not None:
             current_name_font = QFont(self.name_label.font())
             current_name_font.setPointSize(max(1, int(name_font_size)))
@@ -97,7 +164,6 @@ class GameView(QWidget):
         self.text_label.set_text_style(font_size_px=font_size, color_hex=color)
 
     def set_background(self, filename: str) -> None:
-        """切换背景图。"""
         path = asset_path("backgrounds", filename)
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
@@ -106,19 +172,6 @@ class GameView(QWidget):
 
         self._bg_pixmap = pixmap
         self._update_bg_geometry()
-
-    def _update_bg_geometry(self) -> None:
-        if self._bg_pixmap.isNull():
-            return
-
-        self.scene_bg.setGeometry(self.rect())
-        self.scene_bg.setPixmap(
-            self._bg_pixmap.scaled(
-                self.size(),
-                Qt.KeepAspectRatioByExpanding,
-                Qt.SmoothTransformation,
-            )
-        )
 
     def set_name(self, name: str) -> None:
         self.name_label.setText(name)
@@ -137,10 +190,517 @@ class GameView(QWidget):
         self.text_label.set_formula_text(expr)
         self.text_label.setVisible(True)
 
+    def register_image(
+        self,
+        image_id: str,
+        file: str,
+        *,
+        folder: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
+        scale: float | None = None,
+        opacity: float | None = None,
+        z: int | None = None,
+        anchor_x: float | None = None,
+        anchor_y: float | None = None,
+        visible: bool = False,
+    ) -> bool:
+        sprite_id = image_id.strip()
+        if not sprite_id:
+            return False
+
+        loaded = self._load_sprite_pixmap(file=file, folder=folder)
+        if loaded is None:
+            return False
+        pixmap, resolved_source = loaded
+
+        state = self._sprites.get(sprite_id)
+        if state is None:
+            label = QLabel(self.sprite_root)
+            label.setAttribute(Qt.WA_TranslucentBackground)
+            label.setScaledContents(True)
+            effect = QGraphicsOpacityEffect(label)
+            label.setGraphicsEffect(effect)
+
+            state = _SpriteState(
+                image_id=sprite_id,
+                label=label,
+                opacity_effect=effect,
+                pixmap=pixmap,
+                source=resolved_source,
+                visible=bool(visible),
+            )
+            self._sprites[sprite_id] = state
+        else:
+            self._cancel_sprite_animation(sprite_id)
+            state.pixmap = pixmap
+            state.source = resolved_source
+            state.visible = bool(visible)
+
+        if x is not None:
+            state.x = float(x)
+        if y is not None:
+            state.y = float(y)
+        if scale is not None:
+            state.scale = max(0.01, float(scale))
+        if opacity is not None:
+            state.opacity = self._clamp_opacity(opacity)
+        if z is not None:
+            state.z = int(z)
+        if anchor_x is not None:
+            state.anchor_x = float(anchor_x)
+        if anchor_y is not None:
+            state.anchor_y = float(anchor_y)
+
+        self._refresh_sprite_stack()
+        self._apply_sprite_state(state)
+        return True
+
+    def set_image_source(
+        self,
+        image_id: str,
+        file: str,
+        *,
+        folder: str | None = None,
+    ) -> bool:
+        state = self._sprites.get(image_id)
+        if state is None:
+            return False
+
+        loaded = self._load_sprite_pixmap(file=file, folder=folder)
+        if loaded is None:
+            return False
+
+        pixmap, resolved_source = loaded
+        state.pixmap = pixmap
+        state.source = resolved_source
+        self._apply_sprite_state(state)
+        return True
+
+    def show_image(
+        self,
+        image_id: str,
+        *,
+        x: float | None = None,
+        y: float | None = None,
+        dx: float | None = None,
+        dy: float | None = None,
+        scale: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        dopacity: float | None = None,
+        z: int | None = None,
+        file: str | None = None,
+        folder: str | None = None,
+        duration_ms: int = 0,
+        easing: str = "linear",
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        state = self._sprites.get(image_id)
+        if state is None:
+            return False
+
+        if file:
+            if not self.set_image_source(image_id, file, folder=folder):
+                return False
+
+        if z is not None:
+            state.z = int(z)
+            self._refresh_sprite_stack()
+
+        target_x, target_y, target_scale, target_opacity = self._resolve_targets(
+            state,
+            x=x,
+            y=y,
+            dx=dx,
+            dy=dy,
+            scale=scale,
+            dscale=dscale,
+            opacity=opacity,
+            dopacity=dopacity,
+        )
+
+        state.visible = True
+        return self._start_sprite_animation(
+            state,
+            to_x=target_x,
+            to_y=target_y,
+            to_scale=target_scale,
+            to_opacity=target_opacity,
+            duration_ms=duration_ms,
+            easing_name=easing,
+            hide_on_finish=False,
+            remove_on_finish=False,
+            on_finished=on_finished,
+        )
+
+    def hide_image(
+        self,
+        image_id: str,
+        *,
+        dx: float | None = None,
+        dy: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        duration_ms: int = 0,
+        easing: str = "linear",
+        remove: bool = False,
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        state = self._sprites.get(image_id)
+        if state is None:
+            return False
+
+        target_x, target_y, target_scale, _ = self._resolve_targets(
+            state,
+            dx=dx,
+            dy=dy,
+            dscale=dscale,
+        )
+        target_opacity = self._clamp_opacity(0.0 if opacity is None else opacity)
+
+        state.visible = True
+        return self._start_sprite_animation(
+            state,
+            to_x=target_x,
+            to_y=target_y,
+            to_scale=target_scale,
+            to_opacity=target_opacity,
+            duration_ms=duration_ms,
+            easing_name=easing,
+            hide_on_finish=True,
+            remove_on_finish=bool(remove),
+            on_finished=on_finished,
+        )
+
+    def transform_image(
+        self,
+        image_id: str,
+        *,
+        x: float | None = None,
+        y: float | None = None,
+        dx: float | None = None,
+        dy: float | None = None,
+        scale: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        dopacity: float | None = None,
+        z: int | None = None,
+        duration_ms: int = 0,
+        easing: str = "linear",
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        state = self._sprites.get(image_id)
+        if state is None:
+            return False
+
+        if z is not None:
+            state.z = int(z)
+            self._refresh_sprite_stack()
+
+        target_x, target_y, target_scale, target_opacity = self._resolve_targets(
+            state,
+            x=x,
+            y=y,
+            dx=dx,
+            dy=dy,
+            scale=scale,
+            dscale=dscale,
+            opacity=opacity,
+            dopacity=dopacity,
+        )
+
+        if target_opacity > 0.0:
+            state.visible = True
+
+        return self._start_sprite_animation(
+            state,
+            to_x=target_x,
+            to_y=target_y,
+            to_scale=target_scale,
+            to_opacity=target_opacity,
+            duration_ms=duration_ms,
+            easing_name=easing,
+            hide_on_finish=False,
+            remove_on_finish=False,
+            on_finished=on_finished,
+        )
+
+    def remove_image(self, image_id: str) -> bool:
+        state = self._sprites.get(image_id)
+        if state is None:
+            return False
+
+        self._cancel_sprite_animation(image_id)
+        state.label.hide()
+        state.label.deleteLater()
+        del self._sprites[image_id]
+        return True
+
+    def clear_images(self) -> None:
+        for image_id in list(self._sprites.keys()):
+            self.remove_image(image_id)
+        self._sprite_anims.clear()
+        self._anim_timer.stop()
+
+    def _load_sprite_pixmap(
+        self, file: str, folder: str | None = None
+    ) -> tuple[QPixmap, str] | None:
+        if not isinstance(file, str) or not file.strip():
+            return None
+
+        resolved = self._resolve_asset_file(file.strip(), folder=folder)
+        if resolved is None:
+            print(f"[GameView] failed to resolve image asset: {file}")
+            return None
+
+        pixmap = QPixmap(str(resolved))
+        if pixmap.isNull():
+            print(f"[GameView] failed to load image: {resolved}")
+            return None
+
+        return pixmap, str(resolved)
+
+    def _resolve_asset_file(self, file: str, folder: str | None = None) -> Path | None:
+        candidate = Path(file)
+        if candidate.is_absolute() and candidate.exists():
+            return candidate
+
+        paths_to_try: list[Path] = []
+
+        if folder:
+            folder_path = Path(folder)
+            paths_to_try.append(asset_path(*(folder_path / candidate).parts))
+
+        if len(candidate.parts) > 1:
+            paths_to_try.append(asset_path(*candidate.parts))
+        else:
+            for image_folder in _IMAGE_SEARCH_FOLDERS:
+                paths_to_try.append(asset_path(image_folder, file))
+            paths_to_try.append(asset_path(file))
+
+        checked: set[str] = set()
+        for path in paths_to_try:
+            key = str(path)
+            if key in checked:
+                continue
+            checked.add(key)
+            if path.exists():
+                return path
+
+        assets_root = asset_path()
+        if assets_root.exists() and candidate.name:
+            for matched in assets_root.rglob(candidate.name):
+                if matched.is_file():
+                    return matched
+
+        return None
+
+    def _resolve_targets(
+        self,
+        state: _SpriteState,
+        *,
+        x: float | None = None,
+        y: float | None = None,
+        dx: float | None = None,
+        dy: float | None = None,
+        scale: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        dopacity: float | None = None,
+    ) -> tuple[float, float, float, float]:
+        target_x = float(x) if x is not None else state.x
+        target_y = float(y) if y is not None else state.y
+
+        if dx is not None:
+            target_x += float(dx)
+        if dy is not None:
+            target_y += float(dy)
+
+        target_scale = float(scale) if scale is not None else state.scale
+        if dscale is not None:
+            target_scale += float(dscale)
+        target_scale = max(0.01, target_scale)
+
+        target_opacity = (
+            self._clamp_opacity(opacity) if opacity is not None else state.opacity
+        )
+        if dopacity is not None:
+            target_opacity = self._clamp_opacity(target_opacity + float(dopacity))
+
+        return target_x, target_y, target_scale, target_opacity
+
+    def _start_sprite_animation(
+        self,
+        state: _SpriteState,
+        *,
+        to_x: float,
+        to_y: float,
+        to_scale: float,
+        to_opacity: float,
+        duration_ms: int,
+        easing_name: str,
+        hide_on_finish: bool,
+        remove_on_finish: bool,
+        on_finished: Callable[[], None] | None,
+    ) -> bool:
+        self._cancel_sprite_animation(state.image_id)
+
+        clamped_duration = max(0, int(duration_ms))
+        if clamped_duration == 0:
+            state.x = to_x
+            state.y = to_y
+            state.scale = max(0.01, to_scale)
+            state.opacity = self._clamp_opacity(to_opacity)
+            if hide_on_finish:
+                state.visible = False
+            self._apply_sprite_state(state)
+            if remove_on_finish:
+                self.remove_image(state.image_id)
+            if on_finished is not None:
+                on_finished()
+            return False
+
+        easing = self._make_easing_curve(easing_name)
+        anim = _SpriteAnimation(
+            image_id=state.image_id,
+            started_at=time.monotonic(),
+            duration_ms=clamped_duration,
+            easing=easing,
+            from_x=state.x,
+            from_y=state.y,
+            from_scale=state.scale,
+            from_opacity=state.opacity,
+            to_x=to_x,
+            to_y=to_y,
+            to_scale=max(0.01, to_scale),
+            to_opacity=self._clamp_opacity(to_opacity),
+            hide_on_finish=hide_on_finish,
+            remove_on_finish=remove_on_finish,
+            on_finished=on_finished,
+        )
+
+        state.visible = True
+        self._sprite_anims[state.image_id] = anim
+        if not self._anim_timer.isActive():
+            self._anim_timer.start()
+        return True
+
+    def _cancel_sprite_animation(self, image_id: str) -> None:
+        self._sprite_anims.pop(image_id, None)
+        if not self._sprite_anims:
+            self._anim_timer.stop()
+
+    def _on_sprite_anim_tick(self) -> None:
+        if not self._sprite_anims:
+            self._anim_timer.stop()
+            return
+
+        now = time.monotonic()
+        completed_ids: list[str] = []
+        callback_queue: list[Callable[[], None]] = []
+
+        for image_id, anim in list(self._sprite_anims.items()):
+            state = self._sprites.get(image_id)
+            if state is None:
+                completed_ids.append(image_id)
+                continue
+
+            elapsed_ms = (now - anim.started_at) * 1000.0
+            progress = min(1.0, max(0.0, elapsed_ms / float(anim.duration_ms)))
+            eased = float(anim.easing.valueForProgress(progress))
+
+            state.x = anim.from_x + (anim.to_x - anim.from_x) * eased
+            state.y = anim.from_y + (anim.to_y - anim.from_y) * eased
+            state.scale = anim.from_scale + (anim.to_scale - anim.from_scale) * eased
+            state.scale = max(0.01, state.scale)
+            state.opacity = self._clamp_opacity(
+                anim.from_opacity + (anim.to_opacity - anim.from_opacity) * eased
+            )
+            self._apply_sprite_state(state)
+
+            if progress >= 1.0:
+                state.x = anim.to_x
+                state.y = anim.to_y
+                state.scale = anim.to_scale
+                state.opacity = anim.to_opacity
+                if anim.hide_on_finish:
+                    state.visible = False
+                self._apply_sprite_state(state)
+                if anim.remove_on_finish:
+                    self.remove_image(image_id)
+                if anim.on_finished is not None:
+                    callback_queue.append(anim.on_finished)
+                completed_ids.append(image_id)
+
+        for image_id in completed_ids:
+            self._sprite_anims.pop(image_id, None)
+
+        if not self._sprite_anims:
+            self._anim_timer.stop()
+
+        for callback in callback_queue:
+            callback()
+
+    def _apply_sprite_state(self, state: _SpriteState) -> None:
+        if state.pixmap.isNull():
+            state.label.hide()
+            return
+
+        sx = self.width() / float(self.DESIGN_WIDTH)
+        sy = self.height() / float(self.DESIGN_HEIGHT)
+        pixel_scale = min(sx, sy) * max(0.01, state.scale)
+
+        target_w = max(1, int(round(state.pixmap.width() * pixel_scale)))
+        target_h = max(1, int(round(state.pixmap.height() * pixel_scale)))
+        x_px = int(round(state.x * sx - target_w * state.anchor_x))
+        y_px = int(round(state.y * sy - target_h * state.anchor_y))
+
+        state.label.setGeometry(x_px, y_px, target_w, target_h)
+        state.label.setPixmap(
+            state.pixmap.scaled(
+                target_w,
+                target_h,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+        )
+        state.opacity_effect.setOpacity(self._clamp_opacity(state.opacity))
+        state.label.setVisible(state.visible)
+
+    def _refresh_sprite_stack(self) -> None:
+        for state in sorted(self._sprites.values(), key=lambda item: item.z):
+            state.label.raise_()
+
+    def _make_easing_curve(self, easing_name: str) -> QEasingCurve:
+        easing_type = _EASING_MAP.get(
+            (easing_name or "linear").strip().lower(), QEasingCurve.Type.Linear
+        )
+        return QEasingCurve(easing_type)
+
+    @staticmethod
+    def _clamp_opacity(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
+
+    def _update_bg_geometry(self) -> None:
+        if self._bg_pixmap.isNull():
+            return
+
+        self.scene_bg.setGeometry(self.rect())
+        self.scene_bg.setPixmap(
+            self._bg_pixmap.scaled(
+                self.size(),
+                Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation,
+            )
+        )
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
 
         self._update_bg_geometry()
+        self.sprite_root.setGeometry(self.rect())
+
         self.ui_overlay.setGeometry(self.rect())
         self.ui_overlay.setPixmap(
             self._ui_pixmap.scaled(
@@ -157,7 +717,6 @@ class GameView(QWidget):
         text_rect_design = QRect(140, 874, 1640, 256)
 
         def map_rect(rect: QRect) -> QRect:
-            """按设计分辨率映射到当前窗口尺寸。"""
             x = int(rect.x() * width / self.DESIGN_WIDTH)
             y = int(rect.y() * height / self.DESIGN_HEIGHT)
             mapped_width = int(rect.width() * width / self.DESIGN_WIDTH)
@@ -167,7 +726,17 @@ class GameView(QWidget):
         self.name_label.setGeometry(map_rect(name_rect_design))
         self.text_label.setGeometry(map_rect(text_rect_design))
 
+        for state in self._sprites.values():
+            self._apply_sprite_state(state)
+        self._refresh_sprite_stack()
+        self._setup_z_order()
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self.advanceRequested.emit()
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.advanceRequested.emit()
+        super().keyPressEvent(event)

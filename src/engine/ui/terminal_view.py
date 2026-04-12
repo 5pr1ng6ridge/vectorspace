@@ -41,8 +41,10 @@ class ProgressStep:
 @dataclass
 class DotsStep:
     prefix: str
+    states: list
     cycles: int = 3
     interval_ms: int = 250
+    
 
 
 @dataclass
@@ -95,14 +97,15 @@ class TerminalView(QPlainTextEdit):
         # 命令表
         self._commands: Dict[str, Callable[[List[str]], bool]] = {}
         self._register_commands()
-
-        self._apply_style()
-        self._boot_text()
-        self._insert_prompt()
-        
         
         self._step_queue: Deque[TerminalStep] = deque()
         self._queue_running: bool = False
+        
+        self._apply_style()
+        self._boot_text()
+        
+        
+        
         
     def _apply_style(self) -> None:
         font = self._load_pixel_font(28)
@@ -137,9 +140,22 @@ class TerminalView(QPlainTextEdit):
         return QFont("monospace", size)
 
     def _boot_text(self) -> None:
-        self.print_line("VECTSPACE Terminal v0.1\n")
-        self.print_line("Type 'help' for available commands.\n")
-        self.print_line("\n")
+        self._accept_input = False
+
+        steps = [
+            PrintLineStep("***********************************\n",15),
+            PrintLineStep("*  Welcome to WORLD2VEC_TERMINAL  *\n",15),
+            PrintLineStep("***********************************\n",50),
+            PrintLineStep("world2vec Terminal v0.1\n"),
+            PrintLineStep("Type 'help' for available commands.\n",250),
+            PrintLineStep("\n"),
+            CallbackStep(self._finish_terminal_sequence, 10),
+            #CallbackStep(self._jump_to_gameview),
+        ]
+
+        self.enqueue_steps(steps)
+        return False
+        
 
     # ---------------- 基础输出操作 ----------------
 
@@ -305,7 +321,7 @@ class TerminalView(QPlainTextEdit):
         # handler(args) -> bool：返回 True 表示需要立即追加新 prompt
         self._commands = {
             "help": self._cmd_help,
-            "start": self._cmd_start,
+            "init": self._cmd_init,
             "clear": self._cmd_clear,
             "echo": self._cmd_echo,
         }
@@ -347,33 +363,70 @@ class TerminalView(QPlainTextEdit):
         self.print_line(" ".join(args)+"\n")
         return True
 
-    def _cmd_start(self, args: list[str]) -> bool:
+    def _cmd_init(self, args: list[str]) -> bool:
         self._accept_input = False
 
         steps = [
-            PrintLineStep("Initializing math engine...\n", 180),
-            PrintLineStep("Scanning proof archives...\n", 220),
-            PrintLineStep("Allocating Hilbert space...\n", 320),
-            PrintLineStep("\n", 120),
-
-            PrintLineStep("Loading resources 0%", 80),
-            ProgressStep(
-                prefix="Loading resources",
-                start=0,
-                end=100,
-                step=5,
-                interval_ms=70,
-            ),
-            PrintLineStep("\n", 10),
-
-            PrintLineStep("Ready", 80),
-            DotsStep(
-                prefix="Ready",
-                cycles=3,
-                interval_ms=250,
-            ),
-            PrintLineStep("\n", 10),
-
+            PrintLineStep("loading VECTSPACE...\n",50),
+            PrintLineStep("    build by. . . . . . . . . . . . . . . . . . . . . .Epsilon\n",50),
+            PrintLineStep("    fork from . . . . . . . . . . . . . . . . . . . . .\mathbb{R}\n",50),
+            PrintLineStep("\n"),
+            PrintLineStep("Connecting to VECTSPACE\n",100),
+            PrintLineStep("  * Starting system...\n",50),
+            PrintLineStep("  * Initializing CPU...\n",450),
+            PrintLineStep("  * Initializing RAG...\n",250),
+            PrintLineStep("  * Initializing OI...\n",100),
+            PrintLineStep("  * Loading instances...\n",500),
+            PrintLineStep("  * Verifying instances...\n",50),
+            PrintLineStep("    0. E  . . . . . . . . . . . . . . . . . . . . . . . [ success ]\n",100),
+            PrintLineStep("    1. E' . . . . . . . . . . . . . . . . . . . . . . . [ success ]\n",167),
+            PrintLineStep("    2. D  . . . . . . . . . . . . . . . . . . . . . . . [         ]\n",100),
+            PrintLineStep("  * Loading EGO...\n",450),
+            PrintLineStep("    Login: E'\n",15),
+            PrintLineStep("  * Loading architecture...                         \n",100),
+            PrintLineStep("  * Loading virtual OI...\n",150),
+            PrintLineStep("  * Loading skills...\n",100),
+            PrintLineStep("  * Loading RAG...\n",250),
+            PrintLineStep("  * Importing MEM...\n",555),
+            PrintLineStep("    Warning: failed to structured MEM.\n",15),
+            PrintLineStep("  * Resurrection MEM...                                 [ failed  ]\n",1000),
+            PrintLineStep("                                                        [ failed  ]\n",1000),
+            PrintLineStep("                                                        [ timeout ]\n",1000),
+            PrintLineStep("  * Partitoning MEM...\n",500),
+            PrintLineStep("  * Importing MEM...\n",1000),
+            PrintLineStep("    Warning: low CPU usage\n",10),
+            PrintLineStep("  * Visualizating VECTSPACE . . . . . . . . . . . . . . [ timeout ]\n",1000),
+            PrintLineStep("                                                        [ timeout ]\n",1000),
+            PrintLineStep("                                                        [ timeout ]\n",1000),
+            PrintLineStep("                                                        [ timeout ]\n",100),
+            PrintLineStep("                                                        [ timeout ]\n",100),
+            PrintLineStep("                                                        [ timeout ]\n",100),
+            PrintLineStep("                                                        [ timeout ]\n",100),
+            PrintLineStep("                                                        [ timeout ]\n",100),
+            PrintLineStep("                                                        [ timeout ]\n",100),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("  *\n",10),
+            PrintLineStep("\n",2500),
+            PrintLineStep("Fatal: VECTSPACE not responding\n"),
             #CallbackStep(self._finish_terminal_sequence, 10),
             CallbackStep(self._jump_to_gameview),
         ]
@@ -460,7 +513,7 @@ class TerminalView(QPlainTextEdit):
         step: DotsStep,
         on_finished: Callable[[], None],
     ) -> None:
-        states = ["", ".", "..", "..."]
+        states = step.states
         total_ticks = step.cycles * len(states)
         tick_index = 0
 
