@@ -1,5 +1,7 @@
 """场景管理器。"""
 
+from __future__ import annotations
+
 from .script.loader import load_scene_script
 from .script.runner import ScriptRunner
 from .ui.game_view import GameView
@@ -13,5 +15,13 @@ class SceneManager:
     def load_scene(self, scene_name: str) -> None:
         """按场景名加载并启动 Python 场景脚本。"""
         script_data = load_scene_script(scene_name)
-        self.current_runner = ScriptRunner(self.view, script_data)
-        self.current_runner.start()
+        previous_runner = self.current_runner
+        runner = ScriptRunner(
+            self.view,
+            script_data,
+            on_jump=self.load_scene,
+        )
+        self.current_runner = runner
+        if previous_runner is not None:
+            previous_runner.dispose()
+        runner.start()

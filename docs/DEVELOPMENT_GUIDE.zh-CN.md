@@ -249,38 +249,17 @@ Python 场景模块支持以下入口（按优先级）：
   - `def fn(runner)`
   - `def fn(runner, node)`
 
-可选：使用 `src/engine/script/api.py` 的 `SceneBuilder`：
-
-```python
-from src.engine.script.api import SceneBuilder
-
-
-def py_hook(runner):
-    runner.view.set_name("System")
-
-
-def build_scene():
-    builder = SceneBuilder(
-        "demo",
-        defaults={"typing": {"speed_ms": 30}},
-    )
-    return (
-        builder
-        .bg("bg_vstest.png")
-        .say("?", "Hello from Python scene")
-        .call(py_hook)
-        .typing(speed_ms=18)
-        .say("?", "Faster line")
-        .build()
-    )
-```
+`jump` 节点说明：
+- `type="jump"` 时，可跳转到另一个场景脚本文件。
+- 常用字段：`scene`（也兼容 `target` / `to` / `ref` / `file`）。
+- 示例：`{"type": "jump", "scene": "Ch1/loop1"}`。
 
 ## 11. Generator 场景脚本（推荐）
 
 推荐直接用 `yield` 产出节点，而不是手写 `nodes/flow`：
 
 ```python
-from src.engine.script.api import bg, say, style, typing
+from src.engine.script.api import bg, jump, say, style, typing
 
 SCENE_ID = "demo"
 DEFAULTS = {
@@ -312,6 +291,7 @@ def build_scene():
     yield typing(speed_ms=18)
     yield style(color="#F5A9B8")
     yield say("?", "后续文本会使用新速度和样式")
+    yield jump("Ch1/loop1")
 ```
 
 说明：

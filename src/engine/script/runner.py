@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import QTimer
 
@@ -18,9 +18,16 @@ from ..ui.game_view import GameView
 class ScriptRunner:
     """按 ``flow`` 顺序驱动场景节点。"""
 
-    def __init__(self, view: GameView, script_data: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        view: GameView,
+        script_data: dict[str, Any],
+        on_jump: Callable[[str], None] | None = None,
+    ) -> None:
         self.view = view
         self.script_data = script_data
+        self._on_jump = on_jump
+        self._disposed = False
         self.flow: list[str] = script_data.get("flow", [])
         self.nodes: dict[str, dict[str, Any]] = script_data.get("nodes", {})
 
@@ -54,6 +61,8 @@ class ScriptRunner:
         self._apply_defaults()
 
     def start(self) -> None:
+        if self._disposed:
+            return
         self.index = 0
         self.waiting_for_click = False
         self.typing = False
@@ -61,8 +70,43 @@ class ScriptRunner:
         self.waiting_for_pause = False
         self._show_current_node()
 
+    def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
+        self.type_timer.stop()
+        self.pause_timer.stop()
+        try:
+            self.view.advanceRequested.disconnect(self._on_advance_requested)
+        except (TypeError, RuntimeError):
+            pass
+
+    def jump(self, scene_name: str) -> bool:
+        if self._disposed:
+            return False
+        target = str(scene_name).strip()
+        if not target or self._on_jump is None:
+            return False
+
+        self.type_timer.stop()
+        self.pause_timer.stop()
+        self.waiting_for_click = False
+        self.typing = False
+        self.waiting_for_node_animation = False
+        self.waiting_for_pause = False
+
+        try:
+            self._on_jump(target)
+        except Exception as exc:
+            print(f"[ScriptRunner] jump failed: {target} ({exc})")
+            return False
+        return True
+
     def _show_current_node(self) -> None:
         """显示当前节点；必要时自动跳转到下一个节点。"""
+        if self._disposed:
+            return
+
         if self.index >= len(self.flow):
             self.view.set_name("")
             self.view.show_text("(没有了喵，再点也不会有反应的喵)")
@@ -165,6 +209,13 @@ class ScriptRunner:
             self._show_current_node()
             return
 
+        if node_type == "jump":
+            if self._run_jump_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
         # 未知节点直接跳过，避免流程卡住。
         self.index += 1
         self._show_current_node()
@@ -200,6 +251,8 @@ class ScriptRunner:
             callback(self)
             return
         callback()
+
+    # ======================图像节点====================== 
 
     def _run_image_register_node(self, node: dict[str, Any]) -> None:
         image_id = self._read_str(node, "id", "image_id", "sprite_id", "name", "key")
@@ -324,7 +377,28 @@ class ScriptRunner:
             return
         self.view.remove_image(image_id)
 
+    # ======================scene切换====================== 
+    
+    def _run_jump_node(self, node: dict[str, Any]) -> bool:
+        scene_name = self._read_str(
+            node,
+            "scene",
+            "scene_id",
+            "scene_name",
+            "target",
+            "to",
+            "ref",
+            "file",
+        )
+        if scene_name is None:
+            return False
+        return self.jump(scene_name)
+
+    #==========================================================
+
     def _resume_after_node_animation(self) -> None:
+        if self._disposed:
+            return
         if not self.waiting_for_node_animation:
             return
         self.waiting_for_node_animation = False
@@ -362,6 +436,9 @@ class ScriptRunner:
         self.type_timer.start(self.current_interval_ms_effective)
 
     def _on_typewriter_tick(self) -> None:
+        if self._disposed:
+            self.type_timer.stop()
+            return
         if not self.typing:
             self.type_timer.stop()
             return
@@ -385,6 +462,8 @@ class ScriptRunner:
             self._finish_current_typewriter()
 
     def _on_pause_timeout(self) -> None:
+        if self._disposed:
+            return
         if not self.typing:
             return
 
@@ -553,6 +632,8 @@ class ScriptRunner:
         return boundaries
 
     def _on_advance_requested(self) -> None:
+        if self._disposed:
+            return
         if self.typing:
             self._jump_to_next_pause_or_finish()
             return

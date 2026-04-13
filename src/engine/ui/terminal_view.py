@@ -324,6 +324,7 @@ class TerminalView(QPlainTextEdit):
             "init": self._cmd_init,
             "clear": self._cmd_clear,
             "echo": self._cmd_echo,
+            "t": self._cmd_test,
         }
 
     def _execute_command(self, command: str) -> bool:
@@ -433,6 +434,17 @@ class TerminalView(QPlainTextEdit):
 
         self.enqueue_steps(steps)
         return False
+    
+    def _cmd_test(self, args: list[str]) -> bool:
+        self._accept_input = False
+
+        steps = [
+            CallbackStep(self._jump_to_gameview),
+        ]
+
+        self.enqueue_steps(steps)
+        return False
+ 
  
     # ---------------- 读条动画：xx% + Loading... ----------------
 
