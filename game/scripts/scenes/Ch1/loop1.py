@@ -27,6 +27,6 @@ def build_scene() -> Iterator[SceneLinearItem]:
     yield style(font_size=27, color="#FF0000", name_font_size=40, name_color="#FF0000")
     yield say(
         "",
-        "I feel that my δ is very serious. What should I do? I feel that I am a person with a very serious δ. It's because a+b is rather fragmented, and there are no orthogonal bases around me. So I feel like I am a strange matrix in the solution space. Therefore, when new vectors appear around me, many of the other party's linear transformations might just be due to unit orthogonalization.",
+        "现在的小孩真是一点都不满足，以前我们老资历连核被膜都没有，DNA复制只有一个起始位点，但那时候很方便，mRNA都是多顺反子，也不用剪切、加帽加尾，只有核糖体、鞭毛就很满足了，丙酮酸倒在细胞质基质上吃，有的类囊体都直接裸露在细胞质基质中，不过当时还是很方便的，能边转录边翻译，一个mRNA能结合多个核糖体，现在的这些小孩居然不想要限制性内切酶，去要什么表观遗传、分化，真是搞不懂",
     )
     yield jump("Ch1/loop1")

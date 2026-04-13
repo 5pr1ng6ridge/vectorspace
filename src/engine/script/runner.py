@@ -35,6 +35,7 @@ class ScriptRunner:
         self.waiting_for_click = False
         self.typing = False
         self.waiting_for_node_animation = False
+        self.waiting_for_node_wait = False
 
         # 打字机状态
         self.current_segments: list[DialogueSegment] = []
@@ -57,6 +58,10 @@ class ScriptRunner:
         self.pause_timer.setSingleShot(True)
         self.pause_timer.timeout.connect(self._on_pause_timeout)
 
+        self.node_wait_timer = QTimer(view)
+        self.node_wait_timer.setSingleShot(True)
+        self.node_wait_timer.timeout.connect(self._on_node_wait_timeout)
+
         self.view.advanceRequested.connect(self._on_advance_requested)
         self._apply_defaults()
 
@@ -67,7 +72,9 @@ class ScriptRunner:
         self.waiting_for_click = False
         self.typing = False
         self.waiting_for_node_animation = False
+        self.waiting_for_node_wait = False
         self.waiting_for_pause = False
+        self.node_wait_timer.stop()
         self._show_current_node()
 
     def dispose(self) -> None:
@@ -76,6 +83,7 @@ class ScriptRunner:
         self._disposed = True
         self.type_timer.stop()
         self.pause_timer.stop()
+        self.node_wait_timer.stop()
         try:
             self.view.advanceRequested.disconnect(self._on_advance_requested)
         except (TypeError, RuntimeError):
@@ -90,9 +98,11 @@ class ScriptRunner:
 
         self.type_timer.stop()
         self.pause_timer.stop()
+        self.node_wait_timer.stop()
         self.waiting_for_click = False
         self.typing = False
         self.waiting_for_node_animation = False
+        self.waiting_for_node_wait = False
         self.waiting_for_pause = False
 
         try:
@@ -113,9 +123,11 @@ class ScriptRunner:
             self.waiting_for_click = False
             self.typing = False
             self.waiting_for_node_animation = False
+            self.waiting_for_node_wait = False
             self.waiting_for_pause = False
             self.type_timer.stop()
             self.pause_timer.stop()
+            self.node_wait_timer.stop()
             return
 
         node_id = self.flow[self.index]
@@ -123,8 +135,8 @@ class ScriptRunner:
         node_type = node.get("type")
 
         if node_type == "say":
-            self.view.set_name(node.get("speaker", ""))
             self._start_typewriter(node.get("text", ""))
+            self.view.set_name(node.get("speaker", ""))
             return
 
         if node_type == "formula":
@@ -164,6 +176,17 @@ class ScriptRunner:
             self._show_current_node()
             return
 
+        if node_type in {"wait", "delay", "sleep"}:
+            if self._run_wait_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"wait_click", "click_wait", "gap", "interval", "beat"}:
+            self._run_wait_click_node()
+            return
+
         if node_type in {"dialogue_ui_show", "ui_show"}:
             if self._run_dialogue_ui_show_node(node):
                 return
@@ -174,6 +197,51 @@ class ScriptRunner:
         if node_type in {"dialogue_ui_hide", "ui_hide"}:
             if self._run_dialogue_ui_hide_node(node):
                 return
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"textbox_register", "extra_textbox_register"}:
+            self._run_textbox_register_node(node)
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"textbox_set_text", "textbox_text", "extra_textbox_set_text"}:
+            self._run_textbox_set_text_node(node)
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"textbox_show", "extra_textbox_show"}:
+            if self._run_textbox_show_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"textbox_hide", "extra_textbox_hide"}:
+            if self._run_textbox_hide_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"textbox_transform", "extra_textbox_transform"}:
+            if self._run_textbox_transform_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"textbox_remove", "extra_textbox_remove"}:
+            self._run_textbox_remove_node(node)
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"textbox_clear", "extra_textbox_clear"}:
+            self.view.clear_extra_textboxes()
             self.index += 1
             self._show_current_node()
             return
@@ -268,6 +336,45 @@ class ScriptRunner:
 
     # ======================对话 UI 动画====================== 
 
+    def _run_wait_node(self, node: dict[str, Any]) -> bool:
+        duration_ms = self._read_int(
+            node, "duration_ms", "duration", "time_ms", "time", "ms"
+        )
+        if duration_ms is None:
+            seconds = self._read_float(node, "seconds", "second", "sec", "s")
+            if seconds is not None:
+                duration_ms = int(round(float(seconds) * 1000.0))
+
+        if duration_ms is None:
+            duration_ms = 0
+        duration_ms = max(0, int(duration_ms))
+
+        self.type_timer.stop()
+        self.pause_timer.stop()
+        self.node_wait_timer.stop()
+        self.typing = False
+        self.waiting_for_pause = False
+        self.waiting_for_click = False
+        self.waiting_for_node_animation = False
+        self.waiting_for_node_wait = False
+
+        if duration_ms <= 0:
+            return False
+
+        self.waiting_for_node_wait = True
+        self.node_wait_timer.start(duration_ms)
+        return True
+
+    def _run_wait_click_node(self) -> None:
+        self.type_timer.stop()
+        self.pause_timer.stop()
+        self.node_wait_timer.stop()
+        self.typing = False
+        self.waiting_for_pause = False
+        self.waiting_for_node_animation = False
+        self.waiting_for_node_wait = False
+        self.waiting_for_click = True
+
     def _run_dialogue_ui_show_node(self, node: dict[str, Any]) -> bool:
         wait = self._read_bool(node, "wait", "blocking", "block", default=False)
         duration_ms = self._read_int(
@@ -305,6 +412,173 @@ class ScriptRunner:
             self.waiting_for_node_animation = True
             return True
         return False
+
+    # ======================额外文本框======================
+
+    def _run_textbox_register_node(self, node: dict[str, Any]) -> None:
+        textbox_id = self._read_str(node, "id", "textbox_id", "name", "key")
+        if textbox_id is None:
+            return
+
+        rect_x = self._read_float(node, "rect_x", "x")
+        rect_y = self._read_float(node, "rect_y", "y")
+        rect_w = self._read_float(node, "rect_w", "width", "w")
+        rect_h = self._read_float(node, "rect_h", "height", "h")
+
+        rect_list = node.get("rect")
+        if isinstance(rect_list, (list, tuple)) and len(rect_list) >= 4:
+            if rect_x is None:
+                rect_x = self._to_float(rect_list[0])
+            if rect_y is None:
+                rect_y = self._to_float(rect_list[1])
+            if rect_w is None:
+                rect_w = self._to_float(rect_list[2])
+            if rect_h is None:
+                rect_h = self._to_float(rect_list[3])
+
+        if None in {rect_x, rect_y, rect_w, rect_h}:
+            return
+
+        text = node.get("text")
+        if text is not None and not isinstance(text, str):
+            text = str(text)
+
+        self.view.register_extra_textbox(
+            textbox_id=textbox_id,
+            rect_x=float(rect_x),
+            rect_y=float(rect_y),
+            rect_w=float(rect_w),
+            rect_h=float(rect_h),
+            x=self._read_float(node, "pos_x", "start_x"),
+            y=self._read_float(node, "pos_y", "start_y"),
+            scale=self._read_float(node, "scale"),
+            opacity=self._read_float(node, "opacity", "alpha"),
+            z=self._read_int(node, "z"),
+            text=text if isinstance(text, str) else None,
+            font_size=self._read_int(node, "font_size", "text_size"),
+            color=self._read_str(node, "color", "text_color"),
+            visible=self._read_bool(node, "visible", "show", default=False),
+        )
+
+    def _run_textbox_set_text_node(self, node: dict[str, Any]) -> None:
+        textbox_id = self._read_str(node, "id", "textbox_id", "name", "key")
+        if textbox_id is None:
+            return
+
+        text_value = node.get("text", "")
+        text = text_value if isinstance(text_value, str) else str(text_value)
+        visible: bool | None = None
+        if any(k in node for k in ("visible", "show")):
+            visible = self._read_bool(node, "visible", "show", default=False)
+        self.view.set_extra_textbox_text(textbox_id, text, visible=visible)
+
+    def _run_textbox_show_node(self, node: dict[str, Any]) -> bool:
+        textbox_id = self._read_str(node, "id", "textbox_id", "name", "key")
+        if textbox_id is None:
+            return False
+
+        wait = self._read_bool(node, "wait", "blocking", "block", default=False)
+        duration_ms = self._read_int(
+            node, "duration_ms", "duration", "time_ms", "time", "ms"
+        )
+        if duration_ms is None:
+            duration_ms = 0
+
+        text = node.get("text")
+        if text is not None and not isinstance(text, str):
+            text = str(text)
+
+        pending = self.view.show_extra_textbox(
+            textbox_id=textbox_id,
+            text=text if isinstance(text, str) else None,
+            font_size=self._read_int(node, "font_size", "text_size"),
+            color=self._read_str(node, "color", "text_color"),
+            x=self._read_float(node, "x"),
+            y=self._read_float(node, "y"),
+            dx=self._read_float(node, "dx"),
+            dy=self._read_float(node, "dy"),
+            scale=self._read_float(node, "scale"),
+            dscale=self._read_float(node, "dscale"),
+            opacity=self._read_float(node, "opacity", "alpha"),
+            dopacity=self._read_float(node, "dopacity", "dalpha"),
+            z=self._read_int(node, "z"),
+            duration_ms=max(0, int(duration_ms)),
+            easing=self._read_str(node, "easing", "ease") or "linear",
+            on_finished=self._resume_after_node_animation if wait else None,
+        )
+
+        if wait and pending:
+            self.waiting_for_node_animation = True
+            return True
+        return False
+
+    def _run_textbox_hide_node(self, node: dict[str, Any]) -> bool:
+        textbox_id = self._read_str(node, "id", "textbox_id", "name", "key")
+        if textbox_id is None:
+            return False
+
+        wait = self._read_bool(node, "wait", "blocking", "block", default=False)
+        duration_ms = self._read_int(
+            node, "duration_ms", "duration", "time_ms", "time", "ms"
+        )
+        if duration_ms is None:
+            duration_ms = 0
+
+        pending = self.view.hide_extra_textbox(
+            textbox_id=textbox_id,
+            dx=self._read_float(node, "dx"),
+            dy=self._read_float(node, "dy"),
+            dscale=self._read_float(node, "dscale"),
+            opacity=self._read_float(node, "opacity", "alpha"),
+            duration_ms=max(0, int(duration_ms)),
+            easing=self._read_str(node, "easing", "ease") or "linear",
+            remove=self._read_bool(node, "remove", "delete", default=False),
+            on_finished=self._resume_after_node_animation if wait else None,
+        )
+
+        if wait and pending:
+            self.waiting_for_node_animation = True
+            return True
+        return False
+
+    def _run_textbox_transform_node(self, node: dict[str, Any]) -> bool:
+        textbox_id = self._read_str(node, "id", "textbox_id", "name", "key")
+        if textbox_id is None:
+            return False
+
+        wait = self._read_bool(node, "wait", "blocking", "block", default=False)
+        duration_ms = self._read_int(
+            node, "duration_ms", "duration", "time_ms", "time", "ms"
+        )
+        if duration_ms is None:
+            duration_ms = 0
+
+        pending = self.view.transform_extra_textbox(
+            textbox_id=textbox_id,
+            x=self._read_float(node, "x"),
+            y=self._read_float(node, "y"),
+            dx=self._read_float(node, "dx"),
+            dy=self._read_float(node, "dy"),
+            scale=self._read_float(node, "scale"),
+            dscale=self._read_float(node, "dscale"),
+            opacity=self._read_float(node, "opacity", "alpha"),
+            dopacity=self._read_float(node, "dopacity", "dalpha"),
+            z=self._read_int(node, "z"),
+            duration_ms=max(0, int(duration_ms)),
+            easing=self._read_str(node, "easing", "ease") or "linear",
+            on_finished=self._resume_after_node_animation if wait else None,
+        )
+
+        if wait and pending:
+            self.waiting_for_node_animation = True
+            return True
+        return False
+
+    def _run_textbox_remove_node(self, node: dict[str, Any]) -> None:
+        textbox_id = self._read_str(node, "id", "textbox_id", "name", "key")
+        if textbox_id is None:
+            return
+        self.view.remove_extra_textbox(textbox_id)
 
     # ======================图像节点====================== 
 
@@ -459,6 +733,15 @@ class ScriptRunner:
         self.index += 1
         self._show_current_node()
 
+    def _on_node_wait_timeout(self) -> None:
+        if self._disposed:
+            return
+        if not self.waiting_for_node_wait:
+            return
+        self.waiting_for_node_wait = False
+        self.index += 1
+        self._show_current_node()
+
     def _start_typewriter(self, text: str) -> None:
         self.current_segments = parse_dialogue_segments(text)
         self.current_total_units = count_reveal_units(self.current_segments)
@@ -484,6 +767,18 @@ class ScriptRunner:
             return
 
         if self.current_total_units == 0:
+            self._finish_current_typewriter()
+            return
+
+        # 启动时立即显示首个单位，让 name 和首字同帧出现。
+        self.current_index = self._advance_reveal_progress(self.current_index)
+        self.view.show_text_segments(self.current_segments, self.current_index)
+        self._apply_speed_changes_up_to_current_index()
+
+        if self._try_pause_at_current_index():
+            return
+
+        if self.current_index >= self.current_total_units:
             self._finish_current_typewriter()
             return
 
@@ -692,6 +987,9 @@ class ScriptRunner:
             self._jump_to_next_pause_or_finish()
             return
 
+        if self.waiting_for_node_wait:
+            return
+
         if self.waiting_for_node_animation:
             return
 
@@ -806,3 +1104,19 @@ class ScriptRunner:
                 if normalized in {"0", "false", "no", "off"}:
                     return False
         return default
+
+    @staticmethod
+    def _to_float(value: Any) -> float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            try:
+                return float(stripped)
+            except ValueError:
+                return None
+        return None

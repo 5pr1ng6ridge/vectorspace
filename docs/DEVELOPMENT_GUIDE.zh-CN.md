@@ -254,6 +254,17 @@ Python 场景模块支持以下入口（按优先级）：
 - 常用字段：`scene`（也兼容 `target` / `to` / `ref` / `file`）。
 - 示例：`{"type": "jump", "scene": "Ch1/loop1"}`。
 
+`wait` / `wait_click` 节点说明：
+- `type="wait"`：自动等待一段时间后继续到下一个节点。
+- `type="wait_click"`：空白间隔节点，不改任何显示内容，只在点击一次后继续。
+- `wait` 常用字段：
+  - `duration_ms` / `ms` / `time_ms` / `time`
+  - `s` / `sec` / `second` / `seconds`
+- 示例：
+  - `{"type": "wait", "duration_ms": 800}`
+  - `{"type": "wait", "s": 1.5}`
+  - `{"type": "wait_click"}`
+
 `dialogue_ui_show` / `dialogue_ui_hide` 节点说明：
 - 用于控制文本框 UI（对话框底图、姓名框、文本区域）从底部滑入/滑出。
 - 常用字段：`duration_ms`、`easing`、`wait`。
@@ -266,7 +277,7 @@ Python 场景模块支持以下入口（按优先级）：
 推荐直接用 `yield` 产出节点，而不是手写 `nodes/flow`：
 
 ```python
-from src.engine.script.api import bg, jump, say, style, typing
+from src.engine.script.api import bg, jump, say, style, typing, wait, wait_click
 
 SCENE_ID = "demo"
 DEFAULTS = {
@@ -294,6 +305,9 @@ def build_scene():
     while n > 0:
         yield say("?", f"while 倒计时 {n}")
         n -= 1
+
+    yield wait(ms=600)
+    yield wait_click()
 
     yield typing(speed_ms=18)
     yield style(color="#F5A9B8")
@@ -387,4 +401,55 @@ def build_scene():
         easing="in_out_sine",
     )
     yield image_hide("alice", duration_ms=180, easing="in_quad")
+```
+
+## 13. 额外文本框（无 UI）
+
+可注册额外文本框（纯文本区域，无对话框底图），渲染方式与主文本框一致（同 `DialogueTextView`，支持 `$...$`、`$$...$$`、标签动画等）。
+
+脚本节点：
+
+- `textbox_register` / `extra_textbox_register`
+- `textbox_set_text` / `extra_textbox_set_text`
+- `textbox_show` / `extra_textbox_show`
+- `textbox_hide` / `extra_textbox_hide`
+- `textbox_transform` / `extra_textbox_transform`
+- `textbox_remove` / `extra_textbox_remove`
+- `textbox_clear` / `extra_textbox_clear`
+
+常用字段：
+
+- 注册范围：`rect_x`, `rect_y`, `rect_w`, `rect_h`（也可用 `rect=[x,y,w,h]`）
+- 变换：`x/y`, `dx/dy`, `scale/dscale`, `opacity/dopacity`, `z`
+- 动画：`duration_ms`, `easing`, `wait`
+
+示例（Generator）：
+
+```python
+from src.engine.script.api import (
+    textbox_register,
+    textbox_set_text,
+    textbox_show,
+    textbox_transform,
+    textbox_hide,
+)
+
+
+def build_scene():
+    yield textbox_register(
+        "hint",
+        rect_x=1400,
+        rect_y=120,
+        rect_w=420,
+        rect_h=220,
+        text="初始提示",
+        font_size=28,
+        color="#FFFFFF",
+        opacity=0.0,
+        z=30,
+    )
+    yield textbox_show("hint", opacity=1.0, duration_ms=220, easing="out_quad")
+    yield textbox_set_text("hint", "这是一个额外文本框：$E=mc^2$")
+    yield textbox_transform("hint", dy=30, duration_ms=180, easing="in_out_sine")
+    yield textbox_hide("hint", duration_ms=180, easing="in_quad")
 ```

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from PySide6.QtCore import QEasingCurve, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QFontDatabase, QKeyEvent, QMouseEvent, QPixmap
@@ -93,6 +93,42 @@ class _DialogueUiAnimation:
     on_finished: Callable[[], None] | None
 
 
+@dataclass
+class _ExtraTextBoxState:
+    textbox_id: str
+    view: DialogueTextView
+    opacity_effect: QGraphicsOpacityEffect
+    rect_x: float
+    rect_y: float
+    rect_w: float
+    rect_h: float
+    x: float
+    y: float
+    scale: float = 1.0
+    opacity: float = 1.0
+    z: int = 0
+    visible: bool = False
+
+
+@dataclass
+class _ExtraTextBoxAnimation:
+    textbox_id: str
+    started_at: float
+    duration_ms: int
+    easing: QEasingCurve
+    from_x: float
+    from_y: float
+    from_scale: float
+    from_opacity: float
+    to_x: float
+    to_y: float
+    to_scale: float
+    to_opacity: float
+    hide_on_finish: bool
+    remove_on_finish: bool
+    on_finished: Callable[[], None] | None
+
+
 class GameView(QWidget):
     """承载游戏画面的主 Widget。"""
 
@@ -131,6 +167,11 @@ class GameView(QWidget):
         self._anim_timer = QTimer(self)
         self._anim_timer.setInterval(16)
         self._anim_timer.timeout.connect(self._on_sprite_anim_tick)
+        self._extra_textboxes: dict[str, _ExtraTextBoxState] = {}
+        self._extra_textbox_anims: dict[str, _ExtraTextBoxAnimation] = {}
+        self._extra_textbox_timer = QTimer(self)
+        self._extra_textbox_timer.setInterval(16)
+        self._extra_textbox_timer.timeout.connect(self._on_extra_textbox_anim_tick)
         self._dialogue_ui_offset_design = 0.0
         self._dialogue_ui_visible = True
         self._dialogue_ui_anim: _DialogueUiAnimation | None = None
@@ -144,6 +185,8 @@ class GameView(QWidget):
     def _setup_z_order(self) -> None:
         self.scene_bg.lower()
         self.sprite_root.raise_()
+        self._refresh_sprite_stack()
+        self._refresh_extra_textboxes_stack()
         self.ui_overlay.raise_()
         self.name_label.raise_()
         self.text_label.raise_()
@@ -165,6 +208,8 @@ class GameView(QWidget):
         self.name_label.setFont(QFont(family, 40))
         self.text_label.setFont(QFont(family, 35))
         self.name_label.setStyleSheet("color: #FFFFFF; background: transparent;")
+        for state in self._extra_textboxes.values():
+            state.view.setFont(QFont(family, 35))
 
     def set_dialogue_style(
         self,
@@ -247,6 +292,262 @@ class GameView(QWidget):
             hide_on_finish=True,
             on_finished=on_finished,
         )
+
+    def register_extra_textbox(
+        self,
+        textbox_id: str,
+        rect_x: float,
+        rect_y: float,
+        rect_w: float,
+        rect_h: float,
+        *,
+        x: float | None = None,
+        y: float | None = None,
+        scale: float | None = None,
+        opacity: float | None = None,
+        z: int | None = None,
+        text: str | None = None,
+        font_size: int | None = None,
+        color: str | None = None,
+        visible: bool = False,
+    ) -> bool:
+        key = textbox_id.strip()
+        if not key:
+            return False
+
+        rect_w_value = float(rect_w)
+        rect_h_value = float(rect_h)
+        if rect_w_value <= 0.0 or rect_h_value <= 0.0:
+            return False
+
+        state = self._extra_textboxes.get(key)
+        if state is None:
+            view = DialogueTextView(self.sprite_root)
+            view.setAttribute(Qt.WA_TranslucentBackground)
+            view.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            view.setFont(QFont(self.text_label.font()))
+            effect = QGraphicsOpacityEffect(view)
+            view.setGraphicsEffect(effect)
+            state = _ExtraTextBoxState(
+                textbox_id=key,
+                view=view,
+                opacity_effect=effect,
+                rect_x=float(rect_x),
+                rect_y=float(rect_y),
+                rect_w=rect_w_value,
+                rect_h=rect_h_value,
+                x=float(rect_x),
+                y=float(rect_y),
+                visible=bool(visible),
+            )
+            self._extra_textboxes[key] = state
+        else:
+            self._cancel_extra_textbox_animation(key)
+            state.rect_x = float(rect_x)
+            state.rect_y = float(rect_y)
+            state.rect_w = rect_w_value
+            state.rect_h = rect_h_value
+            state.visible = bool(visible)
+
+        if x is not None:
+            state.x = float(x)
+        if y is not None:
+            state.y = float(y)
+        if scale is not None:
+            state.scale = max(0.01, float(scale))
+        if opacity is not None:
+            state.opacity = self._clamp_opacity(opacity)
+        if z is not None:
+            state.z = int(z)
+        if text is not None:
+            state.view.set_plain_dialogue(text)
+        if font_size is not None or color is not None:
+            state.view.set_text_style(font_size_px=font_size, color_hex=color)
+
+        self._apply_extra_textbox_state(state)
+        self._refresh_extra_textboxes_stack()
+        return True
+
+    def set_extra_textbox_text(
+        self,
+        textbox_id: str,
+        text: str,
+        *,
+        visible: bool | None = None,
+    ) -> bool:
+        state = self._extra_textboxes.get(textbox_id)
+        if state is None:
+            return False
+        state.view.set_plain_dialogue(text)
+        if visible is not None:
+            state.visible = bool(visible)
+        self._apply_extra_textbox_state(state)
+        return True
+
+    def show_extra_textbox(
+        self,
+        textbox_id: str,
+        *,
+        text: str | None = None,
+        font_size: int | None = None,
+        color: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
+        dx: float | None = None,
+        dy: float | None = None,
+        scale: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        dopacity: float | None = None,
+        z: int | None = None,
+        duration_ms: int = 0,
+        easing: str = "linear",
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        state = self._extra_textboxes.get(textbox_id)
+        if state is None:
+            return False
+
+        if text is not None:
+            state.view.set_plain_dialogue(text)
+        if font_size is not None or color is not None:
+            state.view.set_text_style(font_size_px=font_size, color_hex=color)
+        if z is not None:
+            state.z = int(z)
+            self._refresh_extra_textboxes_stack()
+
+        target_x, target_y, target_scale, target_opacity = self._resolve_targets(
+            state,
+            x=x,
+            y=y,
+            dx=dx,
+            dy=dy,
+            scale=scale,
+            dscale=dscale,
+            opacity=opacity,
+            dopacity=dopacity,
+        )
+        state.visible = True
+        return self._start_extra_textbox_animation(
+            state,
+            to_x=target_x,
+            to_y=target_y,
+            to_scale=target_scale,
+            to_opacity=target_opacity,
+            duration_ms=duration_ms,
+            easing_name=easing,
+            hide_on_finish=False,
+            remove_on_finish=False,
+            on_finished=on_finished,
+        )
+
+    def hide_extra_textbox(
+        self,
+        textbox_id: str,
+        *,
+        dx: float | None = None,
+        dy: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        duration_ms: int = 0,
+        easing: str = "linear",
+        remove: bool = False,
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        state = self._extra_textboxes.get(textbox_id)
+        if state is None:
+            return False
+
+        target_x, target_y, target_scale, _ = self._resolve_targets(
+            state,
+            dx=dx,
+            dy=dy,
+            dscale=dscale,
+        )
+        target_opacity = self._clamp_opacity(0.0 if opacity is None else opacity)
+
+        state.visible = True
+        return self._start_extra_textbox_animation(
+            state,
+            to_x=target_x,
+            to_y=target_y,
+            to_scale=target_scale,
+            to_opacity=target_opacity,
+            duration_ms=duration_ms,
+            easing_name=easing,
+            hide_on_finish=True,
+            remove_on_finish=bool(remove),
+            on_finished=on_finished,
+        )
+
+    def transform_extra_textbox(
+        self,
+        textbox_id: str,
+        *,
+        x: float | None = None,
+        y: float | None = None,
+        dx: float | None = None,
+        dy: float | None = None,
+        scale: float | None = None,
+        dscale: float | None = None,
+        opacity: float | None = None,
+        dopacity: float | None = None,
+        z: int | None = None,
+        duration_ms: int = 0,
+        easing: str = "linear",
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        state = self._extra_textboxes.get(textbox_id)
+        if state is None:
+            return False
+
+        if z is not None:
+            state.z = int(z)
+            self._refresh_extra_textboxes_stack()
+
+        target_x, target_y, target_scale, target_opacity = self._resolve_targets(
+            state,
+            x=x,
+            y=y,
+            dx=dx,
+            dy=dy,
+            scale=scale,
+            dscale=dscale,
+            opacity=opacity,
+            dopacity=dopacity,
+        )
+        if target_opacity > 0.0:
+            state.visible = True
+
+        return self._start_extra_textbox_animation(
+            state,
+            to_x=target_x,
+            to_y=target_y,
+            to_scale=target_scale,
+            to_opacity=target_opacity,
+            duration_ms=duration_ms,
+            easing_name=easing,
+            hide_on_finish=False,
+            remove_on_finish=False,
+            on_finished=on_finished,
+        )
+
+    def remove_extra_textbox(self, textbox_id: str) -> bool:
+        state = self._extra_textboxes.get(textbox_id)
+        if state is None:
+            return False
+
+        self._cancel_extra_textbox_animation(textbox_id)
+        state.view.hide()
+        state.view.deleteLater()
+        del self._extra_textboxes[textbox_id]
+        return True
+
+    def clear_extra_textboxes(self) -> None:
+        for textbox_id in list(self._extra_textboxes.keys()):
+            self.remove_extra_textbox(textbox_id)
+        self._extra_textbox_anims.clear()
+        self._extra_textbox_timer.stop()
 
     def register_image(
         self,
@@ -556,7 +857,7 @@ class GameView(QWidget):
 
     def _resolve_targets(
         self,
-        state: _SpriteState,
+        state: Any,
         *,
         x: float | None = None,
         y: float | None = None,
@@ -700,6 +1001,117 @@ class GameView(QWidget):
         for callback in callback_queue:
             callback()
 
+    def _start_extra_textbox_animation(
+        self,
+        state: _ExtraTextBoxState,
+        *,
+        to_x: float,
+        to_y: float,
+        to_scale: float,
+        to_opacity: float,
+        duration_ms: int,
+        easing_name: str,
+        hide_on_finish: bool,
+        remove_on_finish: bool,
+        on_finished: Callable[[], None] | None,
+    ) -> bool:
+        self._cancel_extra_textbox_animation(state.textbox_id)
+
+        clamped_duration = max(0, int(duration_ms))
+        if clamped_duration == 0:
+            state.x = to_x
+            state.y = to_y
+            state.scale = max(0.01, to_scale)
+            state.opacity = self._clamp_opacity(to_opacity)
+            if hide_on_finish:
+                state.visible = False
+            self._apply_extra_textbox_state(state)
+            if remove_on_finish:
+                self.remove_extra_textbox(state.textbox_id)
+            if on_finished is not None:
+                on_finished()
+            return False
+
+        anim = _ExtraTextBoxAnimation(
+            textbox_id=state.textbox_id,
+            started_at=time.monotonic(),
+            duration_ms=clamped_duration,
+            easing=self._make_easing_curve(easing_name),
+            from_x=state.x,
+            from_y=state.y,
+            from_scale=state.scale,
+            from_opacity=state.opacity,
+            to_x=to_x,
+            to_y=to_y,
+            to_scale=max(0.01, to_scale),
+            to_opacity=self._clamp_opacity(to_opacity),
+            hide_on_finish=hide_on_finish,
+            remove_on_finish=remove_on_finish,
+            on_finished=on_finished,
+        )
+        state.visible = True
+        self._extra_textbox_anims[state.textbox_id] = anim
+        if not self._extra_textbox_timer.isActive():
+            self._extra_textbox_timer.start()
+        return True
+
+    def _cancel_extra_textbox_animation(self, textbox_id: str) -> None:
+        self._extra_textbox_anims.pop(textbox_id, None)
+        if not self._extra_textbox_anims:
+            self._extra_textbox_timer.stop()
+
+    def _on_extra_textbox_anim_tick(self) -> None:
+        if not self._extra_textbox_anims:
+            self._extra_textbox_timer.stop()
+            return
+
+        now = time.monotonic()
+        completed_ids: list[str] = []
+        callback_queue: list[Callable[[], None]] = []
+
+        for textbox_id, anim in list(self._extra_textbox_anims.items()):
+            state = self._extra_textboxes.get(textbox_id)
+            if state is None:
+                completed_ids.append(textbox_id)
+                continue
+
+            elapsed_ms = (now - anim.started_at) * 1000.0
+            progress = min(1.0, max(0.0, elapsed_ms / float(anim.duration_ms)))
+            eased = float(anim.easing.valueForProgress(progress))
+
+            state.x = anim.from_x + (anim.to_x - anim.from_x) * eased
+            state.y = anim.from_y + (anim.to_y - anim.from_y) * eased
+            state.scale = max(
+                0.01, anim.from_scale + (anim.to_scale - anim.from_scale) * eased
+            )
+            state.opacity = self._clamp_opacity(
+                anim.from_opacity + (anim.to_opacity - anim.from_opacity) * eased
+            )
+            self._apply_extra_textbox_state(state)
+
+            if progress >= 1.0:
+                state.x = anim.to_x
+                state.y = anim.to_y
+                state.scale = anim.to_scale
+                state.opacity = anim.to_opacity
+                if anim.hide_on_finish:
+                    state.visible = False
+                self._apply_extra_textbox_state(state)
+                if anim.remove_on_finish:
+                    self.remove_extra_textbox(textbox_id)
+                if anim.on_finished is not None:
+                    callback_queue.append(anim.on_finished)
+                completed_ids.append(textbox_id)
+
+        for textbox_id in completed_ids:
+            self._extra_textbox_anims.pop(textbox_id, None)
+
+        if not self._extra_textbox_anims:
+            self._extra_textbox_timer.stop()
+
+        for callback in callback_queue:
+            callback()
+
     def _apply_sprite_state(self, state: _SpriteState) -> None:
         if state.pixmap.isNull():
             state.label.hide()
@@ -726,9 +1138,24 @@ class GameView(QWidget):
         state.opacity_effect.setOpacity(self._clamp_opacity(state.opacity))
         state.label.setVisible(state.visible)
 
+    def _apply_extra_textbox_state(self, state: _ExtraTextBoxState) -> None:
+        sx = self.width() / float(self.DESIGN_WIDTH)
+        sy = self.height() / float(self.DESIGN_HEIGHT)
+        target_w = max(1, int(round(state.rect_w * sx * max(0.01, state.scale))))
+        target_h = max(1, int(round(state.rect_h * sy * max(0.01, state.scale))))
+        x_px = int(round(state.x * sx))
+        y_px = int(round(state.y * sy))
+        state.view.setGeometry(x_px, y_px, target_w, target_h)
+        state.opacity_effect.setOpacity(self._clamp_opacity(state.opacity))
+        state.view.setVisible(state.visible)
+
     def _refresh_sprite_stack(self) -> None:
         for state in sorted(self._sprites.values(), key=lambda item: item.z):
             state.label.raise_()
+
+    def _refresh_extra_textboxes_stack(self) -> None:
+        for state in sorted(self._extra_textboxes.values(), key=lambda item: item.z):
+            state.view.raise_()
 
     def _make_easing_curve(self, easing_name: str) -> QEasingCurve:
         easing_type = _EASING_MAP.get(
@@ -888,7 +1315,10 @@ class GameView(QWidget):
 
         for state in self._sprites.values():
             self._apply_sprite_state(state)
+        for state in self._extra_textboxes.values():
+            self._apply_extra_textbox_state(state)
         self._refresh_sprite_stack()
+        self._refresh_extra_textboxes_stack()
         self._setup_z_order()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
