@@ -63,6 +63,52 @@ def jump(scene_name: str) -> SceneNode:
     return {"type": "jump", "scene": scene_name}
 
 
+def dialogue_ui_show(
+    *,
+    duration_ms: int | None = None,
+    easing: str | None = None,
+    wait: bool = False,
+) -> SceneNode:
+    node: SceneNode = {"type": "dialogue_ui_show", "wait": bool(wait)}
+    if duration_ms is not None:
+        node["duration_ms"] = int(duration_ms)
+    if easing is not None:
+        node["easing"] = easing
+    return node
+
+
+def dialogue_ui_hide(
+    *,
+    duration_ms: int | None = None,
+    easing: str | None = None,
+    wait: bool = False,
+) -> SceneNode:
+    node: SceneNode = {"type": "dialogue_ui_hide", "wait": bool(wait)}
+    if duration_ms is not None:
+        node["duration_ms"] = int(duration_ms)
+    if easing is not None:
+        node["easing"] = easing
+    return node
+
+
+def ui_show(
+    *,
+    duration_ms: int | None = None,
+    easing: str | None = None,
+    wait: bool = False,
+) -> SceneNode:
+    return dialogue_ui_show(duration_ms=duration_ms, easing=easing, wait=wait)
+
+
+def ui_hide(
+    *,
+    duration_ms: int | None = None,
+    easing: str | None = None,
+    wait: bool = False,
+) -> SceneNode:
+    return dialogue_ui_hide(duration_ms=duration_ms, easing=easing, wait=wait)
+
+
 def image_register(
     image_id: str,
     file: str,

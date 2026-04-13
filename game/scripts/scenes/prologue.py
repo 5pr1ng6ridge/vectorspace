@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from src.engine.script.api import SceneLinearItem, bg, image_hide, image_register, image_show, image_transform, jump, say, style, typing
+from src.engine.script.api import SceneLinearItem, bg, dialogue_ui_hide, dialogue_ui_show, image_hide, image_register, image_show, image_transform, jump, say, style, typing
 
 SCENE_ID = "prologue"
 DEFAULTS = {
@@ -26,6 +26,8 @@ DEFAULTS = {
 def build_scene() -> Iterator[SceneLinearItem]:
     """按顺序产出场景节点。"""
     yield bg("line1.png")
+    yield dialogue_ui_hide(duration_ms=0, easing="in_circ", wait=True)
+    yield dialogue_ui_show(duration_ms=400, easing="out_circ", wait=True)
     yield say(
         "ヨミビトシラズ",
         "在不计其数的<span style=\"color: white;\"><i>archive</i></span>之上  在半径25cm的窗户上  注视着你 <pause ms=\"500\"/><h1 style=\"font-size:30px;\"><i><epsilon>掃いて捨てるほどの記録の上  半径25cmの窓で  きみを見ている  </epsilon></i></h1>",
@@ -53,8 +55,8 @@ def build_scene() -> Iterator[SceneLinearItem]:
     )
     yield image_transform(
         "idge",
-        dx=-140,
-        dscale=0.05,
+        dx=-340,
+        #dscale=0.05,
         duration_ms=220,
         easing="in_out_sine",
         wait=True,

@@ -41,6 +41,8 @@ _EASING_MAP: dict[str, QEasingCurve.Type] = {
     "out_bounce": QEasingCurve.Type.OutBounce,
     "in_out_bounce": QEasingCurve.Type.InOutBounce,
     "out_elastic": QEasingCurve.Type.OutElastic,
+    "in_circ": QEasingCurve.Type.InCirc, 
+    "out_circ": QEasingCurve.Type.OutCirc,
 }
 
 
@@ -80,6 +82,17 @@ class _SpriteAnimation:
     on_finished: Callable[[], None] | None
 
 
+@dataclass
+class _DialogueUiAnimation:
+    started_at: float
+    duration_ms: int
+    easing: QEasingCurve
+    from_offset_design: float
+    to_offset_design: float
+    hide_on_finish: bool
+    on_finished: Callable[[], None] | None
+
+
 class GameView(QWidget):
     """承载游戏画面的主 Widget。"""
 
@@ -87,6 +100,9 @@ class GameView(QWidget):
 
     DESIGN_WIDTH = 1920
     DESIGN_HEIGHT = 1080
+    NAME_RECT_DESIGN = QRect(0, 746, 468, 70)
+    TEXT_RECT_DESIGN = QRect(140, 874, 1640, 256)
+    DIALOGUE_UI_HIDDEN_OFFSET_DESIGN = 360.0
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -115,6 +131,12 @@ class GameView(QWidget):
         self._anim_timer = QTimer(self)
         self._anim_timer.setInterval(16)
         self._anim_timer.timeout.connect(self._on_sprite_anim_tick)
+        self._dialogue_ui_offset_design = 0.0
+        self._dialogue_ui_visible = True
+        self._dialogue_ui_anim: _DialogueUiAnimation | None = None
+        self._dialogue_ui_timer = QTimer(self)
+        self._dialogue_ui_timer.setInterval(16)
+        self._dialogue_ui_timer.timeout.connect(self._on_dialogue_ui_anim_tick)
 
         self._apply_fonts()
         self._setup_z_order()
@@ -178,17 +200,53 @@ class GameView(QWidget):
 
     def show_text(self, text: str) -> None:
         self.text_label.set_plain_dialogue(text)
-        self.text_label.setVisible(True)
+        if self._dialogue_ui_visible or self._dialogue_ui_anim is not None:
+            self.text_label.setVisible(True)
 
     def show_text_segments(
         self, segments: list[DialogueSegment], visible_units: int | None = None
     ) -> None:
         self.text_label.set_text_segments(segments, visible_units)
-        self.text_label.setVisible(True)
+        if self._dialogue_ui_visible or self._dialogue_ui_anim is not None:
+            self.text_label.setVisible(True)
 
     def show_formula(self, expr: str) -> None:
         self.text_label.set_formula_text(expr)
-        self.text_label.setVisible(True)
+        if self._dialogue_ui_visible or self._dialogue_ui_anim is not None:
+            self.text_label.setVisible(True)
+
+    def show_dialogue_ui(
+        self,
+        *,
+        duration_ms: int = 220,
+        easing: str = "out_quad",
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        self._dialogue_ui_visible = True
+        self._set_dialogue_ui_widgets_visible(True)
+        return self._start_dialogue_ui_animation(
+            to_offset_design=0.0,
+            duration_ms=duration_ms,
+            easing_name=easing,
+            hide_on_finish=False,
+            on_finished=on_finished,
+        )
+
+    def hide_dialogue_ui(
+        self,
+        *,
+        duration_ms: int = 220,
+        easing: str = "in_quad",
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        self._set_dialogue_ui_widgets_visible(True)
+        return self._start_dialogue_ui_animation(
+            to_offset_design=self.DIALOGUE_UI_HIDDEN_OFFSET_DESIGN,
+            duration_ms=duration_ms,
+            easing_name=easing,
+            hide_on_finish=True,
+            on_finished=on_finished,
+        )
 
     def register_image(
         self,
@@ -678,6 +736,132 @@ class GameView(QWidget):
         )
         return QEasingCurve(easing_type)
 
+    def _start_dialogue_ui_animation(
+        self,
+        *,
+        to_offset_design: float,
+        duration_ms: int,
+        easing_name: str,
+        hide_on_finish: bool,
+        on_finished: Callable[[], None] | None,
+    ) -> bool:
+        self._dialogue_ui_anim = None
+
+        target_offset = max(0.0, float(to_offset_design))
+        clamped_duration = max(0, int(duration_ms))
+        if abs(self._dialogue_ui_offset_design - target_offset) < 1e-6:
+            if hide_on_finish:
+                self._dialogue_ui_visible = False
+                self._set_dialogue_ui_widgets_visible(False)
+            else:
+                self._dialogue_ui_visible = True
+                self._set_dialogue_ui_widgets_visible(True)
+            self._update_dialogue_ui_geometry()
+            if on_finished is not None:
+                on_finished()
+            return False
+
+        if clamped_duration == 0:
+            self._dialogue_ui_offset_design = target_offset
+            if hide_on_finish:
+                self._dialogue_ui_visible = False
+                self._set_dialogue_ui_widgets_visible(False)
+            else:
+                self._dialogue_ui_visible = True
+                self._set_dialogue_ui_widgets_visible(True)
+            self._update_dialogue_ui_geometry()
+            if on_finished is not None:
+                on_finished()
+            return False
+
+        easing = self._make_easing_curve(easing_name)
+        self._dialogue_ui_anim = _DialogueUiAnimation(
+            started_at=time.monotonic(),
+            duration_ms=clamped_duration,
+            easing=easing,
+            from_offset_design=self._dialogue_ui_offset_design,
+            to_offset_design=target_offset,
+            hide_on_finish=hide_on_finish,
+            on_finished=on_finished,
+        )
+        if not self._dialogue_ui_timer.isActive():
+            self._dialogue_ui_timer.start()
+        return True
+
+    def _on_dialogue_ui_anim_tick(self) -> None:
+        anim = self._dialogue_ui_anim
+        if anim is None:
+            self._dialogue_ui_timer.stop()
+            return
+
+        elapsed_ms = (time.monotonic() - anim.started_at) * 1000.0
+        progress = min(1.0, max(0.0, elapsed_ms / float(anim.duration_ms)))
+        eased = float(anim.easing.valueForProgress(progress))
+        self._dialogue_ui_offset_design = (
+            anim.from_offset_design
+            + (anim.to_offset_design - anim.from_offset_design) * eased
+        )
+        self._update_dialogue_ui_geometry()
+
+        if progress < 1.0:
+            return
+
+        self._dialogue_ui_offset_design = anim.to_offset_design
+        self._dialogue_ui_anim = None
+        self._dialogue_ui_timer.stop()
+        if anim.hide_on_finish:
+            self._dialogue_ui_visible = False
+            self._set_dialogue_ui_widgets_visible(False)
+        else:
+            self._dialogue_ui_visible = True
+            self._set_dialogue_ui_widgets_visible(True)
+        self._update_dialogue_ui_geometry()
+        if anim.on_finished is not None:
+            anim.on_finished()
+
+    def _set_dialogue_ui_widgets_visible(self, visible: bool) -> None:
+        self.ui_overlay.setVisible(visible)
+        self.name_label.setVisible(visible)
+        self.text_label.setVisible(visible)
+
+    def _dialogue_ui_offset_px(self) -> int:
+        if self.height() <= 0:
+            return 0
+        return int(
+            round(
+                self._dialogue_ui_offset_design
+                * self.height()
+                / float(self.DESIGN_HEIGHT)
+            )
+        )
+
+    def _map_design_rect(self, rect: QRect) -> QRect:
+        width = max(1, self.width())
+        height = max(1, self.height())
+        x = int(rect.x() * width / self.DESIGN_WIDTH)
+        y = int(rect.y() * height / self.DESIGN_HEIGHT)
+        mapped_width = int(rect.width() * width / self.DESIGN_WIDTH)
+        mapped_height = int(rect.height() * height / self.DESIGN_HEIGHT)
+        return QRect(x, y, mapped_width, mapped_height)
+
+    def _update_dialogue_ui_geometry(self) -> None:
+        offset_px = self._dialogue_ui_offset_px()
+        self.ui_overlay.setGeometry(0, offset_px, self.width(), self.height())
+        self.ui_overlay.setPixmap(
+            self._ui_pixmap.scaled(
+                self.size(),
+                Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation,
+            )
+        )
+
+        name_rect = self._map_design_rect(self.NAME_RECT_DESIGN)
+        text_rect = self._map_design_rect(self.TEXT_RECT_DESIGN)
+        name_rect.translate(0, offset_px)
+        text_rect.translate(0, offset_px)
+        self.name_label.setGeometry(name_rect)
+        self.text_label.setGeometry(text_rect)
+
     @staticmethod
     def _clamp_opacity(value: float) -> float:
         return max(0.0, min(1.0, float(value)))
@@ -700,31 +884,7 @@ class GameView(QWidget):
 
         self._update_bg_geometry()
         self.sprite_root.setGeometry(self.rect())
-
-        self.ui_overlay.setGeometry(self.rect())
-        self.ui_overlay.setPixmap(
-            self._ui_pixmap.scaled(
-                self.size(),
-                Qt.KeepAspectRatioByExpanding,
-                Qt.SmoothTransformation,
-            )
-        )
-
-        width = self.width()
-        height = self.height()
-
-        name_rect_design = QRect(0, 746, 468, 70)
-        text_rect_design = QRect(140, 874, 1640, 256)
-
-        def map_rect(rect: QRect) -> QRect:
-            x = int(rect.x() * width / self.DESIGN_WIDTH)
-            y = int(rect.y() * height / self.DESIGN_HEIGHT)
-            mapped_width = int(rect.width() * width / self.DESIGN_WIDTH)
-            mapped_height = int(rect.height() * height / self.DESIGN_HEIGHT)
-            return QRect(x, y, mapped_width, mapped_height)
-
-        self.name_label.setGeometry(map_rect(name_rect_design))
-        self.text_label.setGeometry(map_rect(text_rect_design))
+        self._update_dialogue_ui_geometry()
 
         for state in self._sprites.values():
             self._apply_sprite_state(state)

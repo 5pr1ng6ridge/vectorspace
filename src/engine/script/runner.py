@@ -164,6 +164,20 @@ class ScriptRunner:
             self._show_current_node()
             return
 
+        if node_type in {"dialogue_ui_show", "ui_show"}:
+            if self._run_dialogue_ui_show_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"dialogue_ui_hide", "ui_hide"}:
+            if self._run_dialogue_ui_hide_node(node):
+                return
+            self.index += 1
+            self._show_current_node()
+            return
+
         if node_type == "call":
             self._run_call_node(node)
             self.index += 1
@@ -251,6 +265,46 @@ class ScriptRunner:
             callback(self)
             return
         callback()
+
+    # ======================对话 UI 动画====================== 
+
+    def _run_dialogue_ui_show_node(self, node: dict[str, Any]) -> bool:
+        wait = self._read_bool(node, "wait", "blocking", "block", default=False)
+        duration_ms = self._read_int(
+            node, "duration_ms", "duration", "time_ms", "time", "ms"
+        )
+        if duration_ms is None:
+            duration_ms = 220
+
+        pending = self.view.show_dialogue_ui(
+            duration_ms=max(0, int(duration_ms)),
+            easing=self._read_str(node, "easing", "ease") or "out_quad",
+            on_finished=self._resume_after_node_animation if wait else None,
+        )
+
+        if wait and pending:
+            self.waiting_for_node_animation = True
+            return True
+        return False
+
+    def _run_dialogue_ui_hide_node(self, node: dict[str, Any]) -> bool:
+        wait = self._read_bool(node, "wait", "blocking", "block", default=False)
+        duration_ms = self._read_int(
+            node, "duration_ms", "duration", "time_ms", "time", "ms"
+        )
+        if duration_ms is None:
+            duration_ms = 220
+
+        pending = self.view.hide_dialogue_ui(
+            duration_ms=max(0, int(duration_ms)),
+            easing=self._read_str(node, "easing", "ease") or "in_quad",
+            on_finished=self._resume_after_node_animation if wait else None,
+        )
+
+        if wait and pending:
+            self.waiting_for_node_animation = True
+            return True
+        return False
 
     # ======================图像节点====================== 
 

@@ -254,6 +254,13 @@ Python 场景模块支持以下入口（按优先级）：
 - 常用字段：`scene`（也兼容 `target` / `to` / `ref` / `file`）。
 - 示例：`{"type": "jump", "scene": "Ch1/loop1"}`。
 
+`dialogue_ui_show` / `dialogue_ui_hide` 节点说明：
+- 用于控制文本框 UI（对话框底图、姓名框、文本区域）从底部滑入/滑出。
+- 常用字段：`duration_ms`、`easing`、`wait`。
+- 示例：
+  - `{"type": "dialogue_ui_hide", "duration_ms": 220, "easing": "in_quad", "wait": true}`
+  - `{"type": "dialogue_ui_show", "duration_ms": 220, "easing": "out_quad", "wait": true}`
+
 ## 11. Generator 场景脚本（推荐）
 
 推荐直接用 `yield` 产出节点，而不是手写 `nodes/flow`：
