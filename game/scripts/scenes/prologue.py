@@ -30,6 +30,7 @@ DEFAULTS = {
 
 def build_scene() -> Iterator[SceneLinearItem]:
     """按顺序产出场景节点。"""
+    yield dialogue_ui_hide(duration_ms=0, easing="in_circ", wait=True)
     yield bg("line1.png")
     yield image_register(
         "idge",
@@ -46,8 +47,7 @@ def build_scene() -> Iterator[SceneLinearItem]:
         sfx_volume=.6,
         sfx_min_interval_ms=45,
     )
-    yield dialogue_ui_hide(duration_ms=0, easing="in_circ", wait=True)
-    yield dialogue_ui_show(duration_ms=400, easing="out_circ", wait=True)
+    yield dialogue_ui_show(duration_ms=400, easing="out_circ", wait=False)
     ###################
     yield say(
         "ヨミビトシラズ",

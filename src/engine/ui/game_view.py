@@ -146,9 +146,11 @@ class GameView(QWidget):
     DIALOGUE_UI_HIDDEN_OFFSET_DESIGN = 360.0
     TYPEWRITER_SFX_DEFAULT_VOLUME = 0.35
     TYPEWRITER_SFX_DEFAULT_MIN_INTERVAL_MS = 40
+    SCENE_NOISE_FRAME_MS = 67
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
 
         self.scene_bg = QLabel(self)
         self.scene_bg.setScaledContents(True)
@@ -172,6 +174,10 @@ class GameView(QWidget):
         self.text_label = DialogueTextView(self)
         self.text_label.setAttribute(Qt.WA_TranslucentBackground)
         self.text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._scene_noise_overlay = QLabel(self)
+        self._scene_noise_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._scene_noise_overlay.setScaledContents(True)
+        self._scene_noise_overlay.hide()
 
         self._asset_resolve_cache: dict[tuple[str, str | None], str | None] = {}
         self._audio_resolve_cache: dict[tuple[str, str | None], str | None] = {}
@@ -197,6 +203,12 @@ class GameView(QWidget):
         self._typewriter_sfx_min_interval_ms = self.TYPEWRITER_SFX_DEFAULT_MIN_INTERVAL_MS
         self._typewriter_sfx_last_played = 0.0
         self._setup_typewriter_sfx()
+        self._scene_noise_timer = QTimer(self)
+        self._scene_noise_timer.setInterval(self.SCENE_NOISE_FRAME_MS)
+        self._scene_noise_timer.timeout.connect(self._on_scene_noise_tick)
+        self._scene_noise_frames: list[QPixmap] = self._load_scene_noise_frames()
+        self._scene_noise_index = 0
+        self._scene_noise_on_finished: Callable[[], None] | None = None
 
         self._apply_fonts()
         self._setup_z_order()
@@ -209,6 +221,7 @@ class GameView(QWidget):
         self.ui_overlay.raise_()
         self.name_label.raise_()
         self.text_label.raise_()
+        self._scene_noise_overlay.raise_()
 
     def _apply_fonts(self) -> None:
         """加载像素字体并应用到姓名框和对话框。"""
@@ -326,6 +339,34 @@ class GameView(QWidget):
         self.text_label.set_formula_text(expr)
         if self._dialogue_ui_visible or self._dialogue_ui_anim is not None:
             self.text_label.setVisible(True)
+
+    def clear_dialogue_content(self) -> None:
+        """清空姓名与对话内容，避免切场景时残留上一句。"""
+        self.set_name("")
+        self.show_text("")
+
+    def play_scene_noise_once(
+        self,
+        on_finished: Callable[[], None] | None = None,
+    ) -> None:
+        """在最上层播放一轮 noise_* 过渡帧。"""
+        self._scene_noise_on_finished = on_finished
+        if not self._scene_noise_frames:
+            self._finish_scene_noise_playback()
+            return
+
+        self._scene_noise_timer.stop()
+        self._scene_noise_index = 0
+        # 噪声播放期间先隐藏对话 UI，避免 WebEngine 层级覆盖 noise。
+        self._set_dialogue_ui_widgets_visible(False)
+        self._apply_scene_noise_frame(0)
+        self._scene_noise_overlay.show()
+        self._scene_noise_overlay.raise_()
+
+        if len(self._scene_noise_frames) <= 1:
+            QTimer.singleShot(self.SCENE_NOISE_FRAME_MS, self._finish_scene_noise_playback)
+            return
+        self._scene_noise_timer.start()
 
     def show_dialogue_ui(
         self,
@@ -1449,11 +1490,64 @@ class GameView(QWidget):
             self._bg_scaled_size = bg_size
         self.scene_bg.setPixmap(self._bg_scaled_pixmap)
 
+    def _load_scene_noise_frames(self) -> list[QPixmap]:
+        root = asset_path("pic", "backgrounds")
+        if not root.exists():
+            return []
+
+        frame_paths = sorted(root.glob("noise_*.*"), key=lambda p: p.name.lower())
+        frames: list[QPixmap] = []
+        for path in frame_paths:
+            pixmap = self._load_cached_pixmap(path)
+            if pixmap is None:
+                continue
+            frames.append(pixmap)
+        return frames
+
+    def _apply_scene_noise_frame(self, frame_index: int) -> None:
+        if frame_index < 0 or frame_index >= len(self._scene_noise_frames):
+            return
+        frame = self._scene_noise_frames[frame_index]
+        if frame.isNull():
+            return
+
+        target_size = self._scene_noise_overlay.size()
+        if target_size.width() <= 0 or target_size.height() <= 0:
+            target_size = self.size()
+        scaled = frame.scaled(
+            target_size,
+            Qt.KeepAspectRatioByExpanding,
+            Qt.SmoothTransformation,
+        )
+        self._scene_noise_overlay.setPixmap(scaled)
+
+    def _on_scene_noise_tick(self) -> None:
+        self._scene_noise_index += 1
+        if self._scene_noise_index >= len(self._scene_noise_frames):
+            self._finish_scene_noise_playback()
+            return
+        self._apply_scene_noise_frame(self._scene_noise_index)
+
+    def _finish_scene_noise_playback(self) -> None:
+        self._scene_noise_timer.stop()
+        self._scene_noise_overlay.hide()
+        self._set_dialogue_ui_widgets_visible(
+            self._dialogue_ui_visible or self._dialogue_ui_anim is not None
+        )
+
+        callback = self._scene_noise_on_finished
+        self._scene_noise_on_finished = None
+        if callback is not None:
+            callback()
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
 
         self._update_bg_geometry()
         self.sprite_root.setGeometry(self.rect())
+        self._scene_noise_overlay.setGeometry(self.rect())
+        if self._scene_noise_overlay.isVisible():
+            self._apply_scene_noise_frame(self._scene_noise_index)
         self._update_dialogue_ui_geometry()
 
         for state in self._sprites.values():

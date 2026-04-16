@@ -24,11 +24,15 @@ class ScriptRunner:
         script_data: dict[str, Any],
         on_jump: Callable[[str], None] | None = None,
         on_node: Callable[[str, dict[str, Any], int], None] | None = None,
+        on_terminal_write: Callable[[str], None] | None = None,
+        on_close_game: Callable[[bool], None] | None = None,
     ) -> None:
         self.view = view
         self.script_data = script_data
         self._on_jump = on_jump
         self._on_node = on_node
+        self._on_terminal_write = on_terminal_write
+        self._on_close_game = on_close_game
         self._disposed = False
         self.flow: list[str] = script_data.get("flow", [])
         self.nodes: dict[str, dict[str, Any]] = script_data.get("nodes", {})
@@ -50,6 +54,7 @@ class ScriptRunner:
         self.current_unit_boundaries: list[int] = []
         self.current_interval_ms_effective = 30
         self.current_step_by_unit = False
+        self.current_say_auto_next = False
         self.waiting_for_pause = False
         self.type_interval_ms = 30
 
@@ -142,6 +147,13 @@ class ScriptRunner:
                 print(f"[ScriptRunner] on_node failed: {node_id} ({exc})")
 
         if node_type == "say":
+            self.current_say_auto_next = self._read_bool(
+                node,
+                "auto_next",
+                "auto_advance",
+                "auto_continue",
+                default=False,
+            )
             self._start_typewriter(node.get("text", ""))
             self.view.set_name(node.get("speaker", ""))
             return
@@ -259,6 +271,18 @@ class ScriptRunner:
             self._show_current_node()
             return
 
+        if node_type in {"terminal_write", "terminal_log", "terminal_print"}:
+            self._run_terminal_write_node(node)
+            self.index += 1
+            self._show_current_node()
+            return
+
+        if node_type in {"close_gameview", "close_game", "gameview_close"}:
+            self._run_close_game_node(node)
+            self.index += 1
+            self._show_current_node()
+            return
+
         if node_type == "image_register":
             self._run_image_register_node(node)
             self.index += 1
@@ -340,6 +364,31 @@ class ScriptRunner:
             callback(self)
             return
         callback()
+
+    def _run_terminal_write_node(self, node: dict[str, Any]) -> None:
+        if self._on_terminal_write is None:
+            return
+
+        text_value = node.get("text", "")
+        text = text_value if isinstance(text_value, str) else str(text_value)
+        end = node.get("end", "\n")
+        end_text = end if isinstance(end, str) else str(end)
+        payload = f"{text}{end_text}" if end_text else text
+
+        try:
+            self._on_terminal_write(payload)
+        except Exception as exc:
+            print(f"[ScriptRunner] terminal_write failed: {exc}")
+
+    def _run_close_game_node(self, node: dict[str, Any]) -> None:
+        if self._on_close_game is None:
+            return
+
+        confirm = self._read_bool(node, "confirm", "ask", default=False)
+        try:
+            self._on_close_game(confirm)
+        except Exception as exc:
+            print(f"[ScriptRunner] close_game failed: {exc}")
 
     # ======================对话 UI 动画====================== 
 
@@ -877,9 +926,16 @@ class ScriptRunner:
         self.pause_timer.stop()
         self.waiting_for_pause = False
         self.typing = False
-        self.waiting_for_click = True
         self.current_index = self.current_total_units
         self.view.show_text_segments(self.current_segments)
+
+        if self.current_say_auto_next:
+            self.waiting_for_click = False
+            self.index += 1
+            QTimer.singleShot(0, self._show_current_node)
+            return
+
+        self.waiting_for_click = True
 
     def _advance_reveal_progress(self, current_index: int) -> int:
         if self.current_step_by_unit:

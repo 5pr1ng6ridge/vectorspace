@@ -7,14 +7,16 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import (
     QFont,
+    QInputMethodEvent,
     QTextCursor,
     QKeyEvent,
-    QMouseEvent,
+    QKeySequence,
     QTextOption,
 )
 from PySide6.QtWidgets import QPlainTextEdit
 
 from ..resources.fonts import load_font_family
+
 
 
 
@@ -77,7 +79,8 @@ class TerminalView(QPlainTextEdit):
       - ↑/↓ 翻历史
       - 支持读条动画
     """
-    startGameRequested = Signal()
+    startGameRequested = Signal(str)
+    collapseRequested = Signal()
 
     def __init__(self, parent=None, *, history_mode: bool = False) -> None:
         super().__init__(parent)
@@ -88,10 +91,12 @@ class TerminalView(QPlainTextEdit):
         self.setUndoRedoEnabled(False)
         self.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         self.setWordWrapMode(QTextOption.WrapAnywhere)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self._prompt: str = "[VECTSPACE@system: ~]$ "
         self._input_start_pos: int = 0  # 当前输入行的开始位置（在整个文本中的下标）
         self._accept_input: bool = not self._history_mode
+        self._collapse_on_down_enabled = False
 
         # 历史
         self._history: List[str] = []
@@ -254,28 +259,85 @@ class TerminalView(QPlainTextEdit):
         self._accept_input = True
         self._insert_prompt()
 
-    def _jump_to_gameview(self) -> None:
-        self.startGameRequested.emit()
+    def _jump_to_gameview(self, scene_name: str | None = None) -> None:
+        target = scene_name.strip() if isinstance(scene_name, str) else ""
+        self.startGameRequested.emit(target)
 
     def append_history(self, text: str) -> None:
         if not isinstance(text, str):
             text = str(text)
         self.print_block(text)
+
+    def ensure_input_mode(self, *, append_prompt: bool = True) -> None:
+        """将终端切回可输入状态，可选地在末尾追加 prompt。"""
+        if self._history_mode:
+            return
+
+        self._accept_input = True
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.setTextCursor(cursor)
+
+        if append_prompt:
+            plain_text = self.toPlainText()
+            last_line = plain_text.rsplit("\n", 1)[-1] if plain_text else ""
+            if last_line != self._prompt:
+                if plain_text and not plain_text.endswith("\n"):
+                    cursor.insertText("\n")
+                cursor.insertText(self._prompt)
+                self._input_start_pos = cursor.position()
+            else:
+                self._input_start_pos = len(plain_text)
+        else:
+            self._input_start_pos = cursor.position()
+
+        self._move_cursor_to_input_end()
+        self.setFocus(Qt.OtherFocusReason)
+
+    def set_collapse_on_down_enabled(self, enabled: bool) -> None:
+        self._collapse_on_down_enabled = bool(enabled)
     
     # ---------------- 键盘事件重写：实现终端行为 ----------------
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if self._history_mode:
-            event.ignore()
-            return
-        if not self._accept_input:
-            # 读条时禁用输入（你喜欢也可以允许 Ctrl+C 之类的）
-            return
+            return super().keyPressEvent(event)
 
         key = event.key()
+        if (
+            self._collapse_on_down_enabled
+            and key == Qt.Key_Escape
+            and event.modifiers() == Qt.NoModifier
+        ):
+            self.collapseRequested.emit()
+            return
+
+        if event.matches(QKeySequence.Copy):
+            self.copy()
+            return
+        if event.matches(QKeySequence.SelectAll):
+            self.selectAll()
+            return
+        if event.matches(QKeySequence.Cut):
+            return
+
+        if not self._accept_input:
+            # 读条时禁用输入编辑，但保留复制等只读操作
+            if event.matches(QKeySequence.Copy) or event.matches(QKeySequence.SelectAll):
+                return super().keyPressEvent(event)
+            return
 
         cursor = self.textCursor()
         self.setTextCursor(cursor)
+        is_editing_input = (
+            key in (Qt.Key_Backspace, Qt.Key_Delete)
+            or event.matches(QKeySequence.Paste)
+            or bool(event.text())
+        )
+        if cursor.hasSelection() and is_editing_input:
+            # 有选区时，编辑动作不允许覆盖选中文本（尤其是历史输出区域）
+            # 统一把光标收回到当前输入末尾，再按普通输入逻辑处理。
+            self._move_cursor_to_input_end()
 
         # ↑ / ↓ 历史
         if key == Qt.Key_Up:
@@ -296,6 +358,13 @@ class TerminalView(QPlainTextEdit):
         if key == Qt.Key_Backspace:
             cursor = self.textCursor()
             if cursor.position() <= self._input_start_pos:
+                return
+            return super().keyPressEvent(event)
+
+        # Delete：不允许删到 prompt 左边
+        if key == Qt.Key_Delete:
+            cursor = self.textCursor()
+            if cursor.position() < self._input_start_pos:
                 return
             return super().keyPressEvent(event)
 
@@ -326,19 +395,35 @@ class TerminalView(QPlainTextEdit):
                 self._insert_prompt()
             return
 
+        # 粘贴和普通输入统一钉到输入区，防止改写历史输出
+        if (
+            event.matches(QKeySequence.Paste)
+            or (event.text() and not (event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)))
+        ):
+            cursor = self.textCursor()
+            if cursor.position() < self._input_start_pos:
+                self._move_cursor_to_input_end()
+
         # 其他按键：正常处理（文本输入）
         super().keyPressEvent(event)
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        # 禁止鼠标点击改变光标位置（保留焦点）
-        self.setFocus(Qt.MouseFocusReason)
-        self._move_cursor_to_input_end()
-        event.accept()
+    def inputMethodEvent(self, event: QInputMethodEvent) -> None:
+        # 中文输入法等组合输入走这个事件，不走普通 keyPressEvent。
+        # 若当前有选区，IME 提交时会替换选区文本，这里统一收回到输入末尾。
+        if self._history_mode or not self._accept_input:
+            event.ignore()
+            return
 
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        self.setFocus(Qt.MouseFocusReason)
-        self._move_cursor_to_input_end()
-        event.accept()
+        cursor = self.textCursor()
+        if cursor.hasSelection() or cursor.position() < self._input_start_pos:
+            self._move_cursor_to_input_end()
+
+        super().inputMethodEvent(event)
+
+        # 兜底：IME 提交后若光标异常，再次拉回输入区
+        cursor = self.textCursor()
+        if cursor.position() < self._input_start_pos:
+            self._move_cursor_to_input_end()
 
     # ---------------- 历史操作 ----------------
 
@@ -383,7 +468,9 @@ class TerminalView(QPlainTextEdit):
             "init": self._cmd_init,
             "clear": self._cmd_clear,
             "echo": self._cmd_echo,
-            "t": self._cmd_test,
+            "t1": self._cmd_test,
+            "t2": self._cmd_test2,
+            "c": self._cmd_continue,
         }
 
     def _execute_command(self, command: str) -> bool:
@@ -407,7 +494,7 @@ class TerminalView(QPlainTextEdit):
         self.print_block(
             "Available commands:\n"
             "  help        - show this message\n"
-            "  start       - enter the game (with loading)\n"
+            "  start [SCENE] - enter the game (optionally with target scene)\n"
             "  clear       - clear terminal output\n"
             "  echo TEXT   - print TEXT\n"
             "  boot        - demo loading sequence\n"
@@ -425,6 +512,7 @@ class TerminalView(QPlainTextEdit):
 
     def _cmd_init(self, args: list[str]) -> bool:
         self._accept_input = False
+        target_scene = args[0].strip() if args else ""
 
         steps = [
             PrintLineStep("loading VECTSPACE...\n",50),
@@ -488,7 +576,17 @@ class TerminalView(QPlainTextEdit):
             PrintLineStep("\n",2500),
             PrintLineStep("Fatal: VECTSPACE not responding\n"),
             #CallbackStep(self._finish_terminal_sequence, 10),
-            CallbackStep(self._jump_to_gameview),
+            CallbackStep(lambda: self._jump_to_gameview(target_scene)),
+        ]
+
+        self.enqueue_steps(steps)
+        return False
+    
+    def _cmd_continue(self, args: list[str]) -> bool:
+        self._accept_input = False
+
+        steps = [
+            CallbackStep(lambda: self._jump_to_gameview(""))
         ]
 
         self.enqueue_steps(steps)
@@ -496,15 +594,25 @@ class TerminalView(QPlainTextEdit):
     
     def _cmd_test(self, args: list[str]) -> bool:
         self._accept_input = False
+        target_scene = args[0].strip() if args else ""
 
         steps = [
-            CallbackStep(self._jump_to_gameview),
+            CallbackStep(lambda: self._jump_to_gameview("prologue"))
         ]
 
         self.enqueue_steps(steps)
         return False
  
- 
+    def _cmd_test2(self, args: list[str]) -> bool:
+        self._accept_input = False
+        target_scene = args[0].strip() if args else ""
+
+        steps = [
+            CallbackStep(lambda: self._jump_to_gameview("Ch1/loop1"))
+        ]
+
+        self.enqueue_steps(steps)
+        return False 
     # ---------------- 读条动画：xx% + Loading... ----------------
 
     def enqueue_steps(

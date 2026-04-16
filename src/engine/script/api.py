@@ -15,8 +15,16 @@ def bg(file: str) -> SceneNode:
     return {"type": "bg", "file": file}
 
 
-def say(speaker: str, text: str) -> SceneNode:
-    return {"type": "say", "speaker": speaker, "text": text}
+def say(
+    speaker: str,
+    text: str,
+    *,
+    auto_next: bool = False,
+) -> SceneNode:
+    node: SceneNode = {"type": "say", "speaker": speaker, "text": text}
+    if auto_next:
+        node["auto_next"] = True
+    return node
 
 
 def formula(latex: str) -> SceneNode:
@@ -76,6 +84,17 @@ def call(fn: SceneCallable) -> SceneNode:
 
 def jump(scene_name: str) -> SceneNode:
     return {"type": "jump", "scene": scene_name}
+
+def terminal_write(text: str, *, end: str = "\n") -> SceneNode:
+    return {
+        "type": "terminal_write",
+        "text": text,
+        "end": end,
+    }
+
+
+def close_gameview(*, confirm: bool = False) -> SceneNode:
+    return {"type": "close_gameview", "confirm": bool(confirm)}
 
 
 def wait(
