@@ -317,6 +317,8 @@ class TerminalView(QPlainTextEdit):
         # handler(args) -> bool：返回 True 表示需要立即追加新 prompt
         self._commands = {
             "help": self._cmd_help,
+            "start": self._cmd_init,
+            "boot": self._cmd_init,
             "init": self._cmd_init,
             "clear": self._cmd_clear,
             "echo": self._cmd_echo,

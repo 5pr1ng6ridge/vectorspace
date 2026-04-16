@@ -16,7 +16,6 @@ import os
 import re
 import sys
 
-import markdown
 from PySide6.QtCore import QBuffer, QIODevice, Qt, QUrl
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPixmap
 try:
@@ -29,7 +28,6 @@ except ModuleNotFoundError as exc:
 
 from ..resources.paths import asset_path
 
-_MARKDOWN_ESCAPE_RE = re.compile(r"([\\`*_{}\[\]()#+\-.!|>])")
 _DIALOGUE_FONT_ASSET = "fonts/fusion-pixel-12px-monospaced-zh_hans.ttf"
 # 仅解析并放行有限标签，避免脚本直接注入任意 HTML。
 _HTML_TAG_RE = re.compile(r"<\s*(/)?\s*([a-zA-Z][a-zA-Z0-9-]*)\s*([^<>]*?)\s*(/?)\s*>")
@@ -558,11 +556,11 @@ def count_reveal_units(segments: list[DialogueSegment]) -> int:
     return total
 
 
-def _escape_markdown_text(text: str) -> str:
-    return _MARKDOWN_ESCAPE_RE.sub(r"\\\1", text)
-
-
 def _hidden_text_html(text: str) -> str:
+    return html.escape(text).replace("\n", "<br/>")
+
+
+def _visible_text_html(text: str) -> str:
     return html.escape(text).replace("\n", "<br/>")
 
 
@@ -572,7 +570,7 @@ def _protect_formula_for_markdown(formula_text: str) -> str:
     return escaped.replace("\\", "&#92;")
 
 
-def _segments_to_markdown(
+def _segments_to_html(
     segments: list[DialogueSegment], visible_units: int | None
 ) -> str:
     """将片段拼装为 Markdown/HTML 混合文本。
@@ -609,7 +607,7 @@ def _segments_to_markdown(
             continue
 
         if remaining is None:
-            parts.append(_escape_markdown_text(segment.content))
+            parts.append(_visible_text_html(segment.content))
             continue
 
         if remaining <= 0:
@@ -619,17 +617,12 @@ def _segments_to_markdown(
         visible_text = segment.content[:remaining]
         hidden_text = segment.content[remaining:]
         if visible_text:
-            parts.append(_escape_markdown_text(visible_text))
+            parts.append(_visible_text_html(visible_text))
         if hidden_text:
             parts.append(f'<span class="hidden-text">{_hidden_text_html(hidden_text)}</span>')
         remaining -= len(visible_text)
 
     return "".join(parts)
-
-
-def _markdown_to_html(markdown_text: str) -> str:
-    # nl2br keeps dialogue line breaks predictable inside the web container.
-    return markdown.markdown(markdown_text, extensions=["nl2br"])
 
 
 def _escape_css_string(value: str) -> str:
@@ -717,7 +710,7 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
       animation: fx-epsilon 0.5s linear infinite;
       color: #5BCEFA;
       -webkit-text-fill-color: currentColor;
-    }},
+    }}
     #dialogue-root .fx-epsilon * {{
       color: inherit !important;
       -webkit-text-fill-color: inherit !important;
@@ -779,7 +772,7 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
 
       const elapsedSec = (Date.now() - window.__animStartMs) / 1000.0;
       const fxNodes = root.querySelectorAll(
-        ".fx-shake, .fx-wave, .fx-pulse, .fx-glow, .fx-rainbow"
+        ".fx-shake, .fx-wave, .fx-pulse, .fx-glow, .fx-delta, .fx-epsilon, .fx-rainbow"
       );
       fxNodes.forEach(function(node) {{
         node.style.animationDelay = "-" + elapsedSec + "s";
@@ -899,8 +892,7 @@ class DialogueTextView(QWebEngineView):
         if visible_units == 0:
             self._anim_session_id += 1
 
-        markdown_text = _segments_to_markdown(segments, visible_units)
-        content_html = _markdown_to_html(markdown_text)
+        content_html = _segments_to_html(segments, visible_units)
         self._set_content_html(self._wrap_with_anim_session(content_html))
 
     def set_plain_dialogue(self, text: str) -> None:
@@ -911,8 +903,7 @@ class DialogueTextView(QWebEngineView):
     def set_formula_text(self, expr: str) -> None:
         """渲染独立公式块。"""
         self._anim_session_id += 1
-        markdown_text = f"$$\n{expr}\n$$"
-        content_html = _markdown_to_html(markdown_text)
+        content_html = _protect_formula_for_markdown(f"$$\n{expr}\n$$")
         self._set_content_html(self._wrap_with_anim_session(content_html))
 
     def set_formula_pixmap(self, pixmap: QPixmap) -> None:

@@ -8,7 +8,7 @@ import time
 from typing import Any, Callable
 
 from PySide6.QtCore import QEasingCurve, QRect, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QFont, QKeyEvent, QMouseEvent, QPixmap, QFontDatabase
+from PySide6.QtGui import QFont, QKeyEvent, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QWidget
 from PySide6.QtMultimedia import QSoundEffect
 
@@ -64,6 +64,8 @@ class _SpriteState:
     anchor_x: float = 0.5
     anchor_y: float = 1.0
     visible: bool = False
+    scaled_size: tuple[int, int] | None = None
+    scaled_pixmap: QPixmap | None = None
 
 
 @dataclass
@@ -210,18 +212,10 @@ class GameView(QWidget):
 
     def _apply_fonts(self) -> None:
         """加载像素字体并应用到姓名框和对话框。"""
-        font_path = asset_path("fonts", "fusion-pixel-12px-monospaced-zh_hans.ttf")
-        font_id = QFontDatabase.addApplicationFont(str(font_path))
-        if font_id == -1:
+        family = load_font_family("fonts", "fusion-pixel-12px-monospaced-zh_hans.ttf")
+        if not family:
             print("[GameView] failed to load dialogue font")
             return
-
-        families = QFontDatabase.applicationFontFamilies(font_id)
-        if not families:
-            print("[GameView] no font families returned")
-            return
-
-        family = families[0]
         self.name_label.setFont(QFont(family, 40))
         self.text_label.setFont(QFont(family, 35))
         self.name_label.setStyleSheet("color: #FFFFFF; background: transparent;")
@@ -298,13 +292,19 @@ class GameView(QWidget):
         self._typewriter_sfx.play()
 
     def set_background(self, filename: str) -> None:
-        path = asset_path("pic","backgrounds", filename)
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
+        path = self._resolve_asset_file(filename, folder="pic/backgrounds")
+        if path is None:
+            print(f"[GameView] failed to resolve background: {filename}")
+            return
+
+        pixmap = self._load_cached_pixmap(path)
+        if pixmap is None:
             print(f"[GameView] failed to load background: {path}")
             return
 
         self._bg_pixmap = pixmap
+        self._bg_scaled_size = None
+        self._bg_scaled_pixmap = QPixmap()
         self._update_bg_geometry()
 
     def set_name(self, name: str) -> None:
@@ -662,6 +662,8 @@ class GameView(QWidget):
             state.pixmap = pixmap
             state.source = resolved_source
             state.visible = bool(visible)
+            state.scaled_size = None
+            state.scaled_pixmap = None
 
         if x is not None:
             state.x = float(x)
@@ -700,6 +702,8 @@ class GameView(QWidget):
         pixmap, resolved_source = loaded
         state.pixmap = pixmap
         state.source = resolved_source
+        state.scaled_size = None
+        state.scaled_pixmap = None
         self._apply_sprite_state(state)
         return True
 
@@ -880,16 +884,22 @@ class GameView(QWidget):
             print(f"[GameView] failed to resolve image asset: {file}")
             return None
 
-        pixmap = QPixmap(str(resolved))
-        if pixmap.isNull():
+        pixmap = self._load_cached_pixmap(resolved)
+        if pixmap is None:
             print(f"[GameView] failed to load image: {resolved}")
             return None
 
         return pixmap, str(resolved)
 
     def _resolve_asset_file(self, file: str, folder: str | None = None) -> Path | None:
+        cache_key = (file.strip(), folder.strip() if isinstance(folder, str) else None)
+        cached = self._asset_resolve_cache.get(cache_key, _CACHE_MISS)
+        if cached is not _CACHE_MISS:
+            return Path(cached) if cached is not None else None
+
         candidate = Path(file)
         if candidate.is_absolute() and candidate.exists():
+            self._asset_resolve_cache[cache_key] = str(candidate)
             return candidate
 
         paths_to_try: list[Path] = []
@@ -912,19 +922,28 @@ class GameView(QWidget):
                 continue
             checked.add(key)
             if path.exists():
+                self._asset_resolve_cache[cache_key] = str(path)
                 return path
 
         assets_root = asset_path()
         if assets_root.exists() and candidate.name:
             for matched in assets_root.rglob(candidate.name):
                 if matched.is_file():
+                    self._asset_resolve_cache[cache_key] = str(matched)
                     return matched
 
+        self._asset_resolve_cache[cache_key] = None
         return None
 
     def _resolve_audio_file(self, file: str, folder: str | None = None) -> Path | None:
+        cache_key = (file.strip(), folder.strip() if isinstance(folder, str) else None)
+        cached = self._audio_resolve_cache.get(cache_key, _CACHE_MISS)
+        if cached is not _CACHE_MISS:
+            return Path(cached) if cached is not None else None
+
         candidate = Path(file)
         if candidate.is_absolute() and candidate.exists():
+            self._audio_resolve_cache[cache_key] = str(candidate)
             return candidate
 
         paths_to_try: list[Path] = []
@@ -946,15 +965,31 @@ class GameView(QWidget):
                 continue
             checked.add(key)
             if path.exists():
+                self._audio_resolve_cache[cache_key] = str(path)
                 return path
 
         assets_root = asset_path()
         if assets_root.exists() and candidate.name:
             for matched in assets_root.rglob(candidate.name):
                 if matched.is_file():
+                    self._audio_resolve_cache[cache_key] = str(matched)
                     return matched
 
+        self._audio_resolve_cache[cache_key] = None
         return None
+
+    def _load_cached_pixmap(self, path: Path) -> QPixmap | None:
+        cache_key = str(path)
+        cached = self._pixmap_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        pixmap = QPixmap(cache_key)
+        if pixmap.isNull():
+            return None
+
+        self._pixmap_cache[cache_key] = pixmap
+        return pixmap
 
     def _resolve_targets(
         self,
@@ -1228,14 +1263,16 @@ class GameView(QWidget):
         y_px = int(round(state.y * sy - target_h * state.anchor_y))
 
         state.label.setGeometry(x_px, y_px, target_w, target_h)
-        state.label.setPixmap(
-            state.pixmap.scaled(
+        scaled_size = (target_w, target_h)
+        if state.scaled_size != scaled_size or state.scaled_pixmap is None:
+            state.scaled_pixmap = state.pixmap.scaled(
                 target_w,
                 target_h,
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation,
             )
-        )
+            state.scaled_size = scaled_size
+        state.label.setPixmap(state.scaled_pixmap)
         state.opacity_effect.setOpacity(self._clamp_opacity(state.opacity))
         state.label.setVisible(state.visible)
 
@@ -1375,13 +1412,16 @@ class GameView(QWidget):
     def _update_dialogue_ui_geometry(self) -> None:
         offset_px = self._dialogue_ui_offset_px()
         self.ui_overlay.setGeometry(0, offset_px, self.width(), self.height())
-        self.ui_overlay.setPixmap(
-            self._ui_pixmap.scaled(
-                self.size(),
-                Qt.KeepAspectRatioByExpanding,
-                Qt.SmoothTransformation,
-            )
-        )
+        overlay_size = (max(1, self.width()), max(1, self.height()))
+        if not self._ui_pixmap.isNull():
+            if self._ui_scaled_size != overlay_size:
+                self._ui_scaled_pixmap = self._ui_pixmap.scaled(
+                    self.size(),
+                    Qt.KeepAspectRatioByExpanding,
+                    Qt.SmoothTransformation,
+                )
+                self._ui_scaled_size = overlay_size
+            self.ui_overlay.setPixmap(self._ui_scaled_pixmap)
 
         name_rect = self._map_design_rect(self.NAME_RECT_DESIGN)
         text_rect = self._map_design_rect(self.TEXT_RECT_DESIGN)
@@ -1399,13 +1439,15 @@ class GameView(QWidget):
             return
 
         self.scene_bg.setGeometry(self.rect())
-        self.scene_bg.setPixmap(
-            self._bg_pixmap.scaled(
+        bg_size = (max(1, self.width()), max(1, self.height()))
+        if self._bg_scaled_size != bg_size:
+            self._bg_scaled_pixmap = self._bg_pixmap.scaled(
                 self.size(),
                 Qt.KeepAspectRatioByExpanding,
                 Qt.SmoothTransformation,
             )
-        )
+            self._bg_scaled_size = bg_size
+        self.scene_bg.setPixmap(self._bg_scaled_pixmap)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
