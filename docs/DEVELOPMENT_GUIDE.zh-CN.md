@@ -102,6 +102,11 @@
 
 - `speed_ms` / `type_interval_ms` / `interval_ms`
 - `cps` / `chars_per_second`
+- `sfx` / `sfx_enabled` / `type_sfx`：是否启用打字音效
+- `sfx_volume`：音量（`0.0 ~ 1.0`）
+- `sfx_file` / `type_sfx_file`：音效文件名或路径（默认 `sfx/sfx_typing.wav`）
+- `sfx_folder` / `type_sfx_folder`：配合 `sfx_file` 指定子目录
+- `sfx_min_interval_ms` / `type_sfx_min_interval_ms`：最小触发间隔（毫秒，避免过密播放）
 
 ## 3. `defaults` 默认配置
 

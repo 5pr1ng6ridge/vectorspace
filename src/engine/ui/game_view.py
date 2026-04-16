@@ -7,10 +7,12 @@ from pathlib import Path
 import time
 from typing import Any, Callable
 
-from PySide6.QtCore import QEasingCurve, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QFontDatabase, QKeyEvent, QMouseEvent, QPixmap
+from PySide6.QtCore import QEasingCurve, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QFont, QKeyEvent, QMouseEvent, QPixmap, QFontDatabase
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QWidget
+from PySide6.QtMultimedia import QSoundEffect
 
+from ..resources.fonts import load_font_family
 from ..resources.paths import asset_path
 from .dialogue_text import DialogueSegment, DialogueTextView
 
@@ -44,6 +46,7 @@ _EASING_MAP: dict[str, QEasingCurve.Type] = {
     "in_circ": QEasingCurve.Type.InCirc, 
     "out_circ": QEasingCurve.Type.OutCirc,
 }
+_CACHE_MISS = object()
 
 
 @dataclass
@@ -139,6 +142,8 @@ class GameView(QWidget):
     NAME_RECT_DESIGN = QRect(0, 746, 468, 70)
     TEXT_RECT_DESIGN = QRect(140, 874, 1640, 256)
     DIALOGUE_UI_HIDDEN_OFFSET_DESIGN = 360.0
+    TYPEWRITER_SFX_DEFAULT_VOLUME = 0.35
+    TYPEWRITER_SFX_DEFAULT_MIN_INTERVAL_MS = 40
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -146,6 +151,8 @@ class GameView(QWidget):
         self.scene_bg = QLabel(self)
         self.scene_bg.setScaledContents(True)
         self._bg_pixmap = QPixmap()
+        self._bg_scaled_size: tuple[int, int] | None = None
+        self._bg_scaled_pixmap = QPixmap()
 
         self.sprite_root = QWidget(self)
         self.sprite_root.setAttribute(Qt.WA_TranslucentBackground)
@@ -153,6 +160,8 @@ class GameView(QWidget):
         self.ui_overlay = QLabel(self)
         self.ui_overlay.setScaledContents(True)
         self._ui_pixmap = QPixmap(str(asset_path("ui", "dial_box_overlay.png")))
+        self._ui_scaled_size: tuple[int, int] | None = None
+        self._ui_scaled_pixmap = QPixmap()
 
         self.name_label = QLabel(self)
         self.name_label.setAttribute(Qt.WA_TranslucentBackground)
@@ -162,6 +171,9 @@ class GameView(QWidget):
         self.text_label.setAttribute(Qt.WA_TranslucentBackground)
         self.text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
+        self._asset_resolve_cache: dict[tuple[str, str | None], str | None] = {}
+        self._audio_resolve_cache: dict[tuple[str, str | None], str | None] = {}
+        self._pixmap_cache: dict[str, QPixmap] = {}
         self._sprites: dict[str, _SpriteState] = {}
         self._sprite_anims: dict[str, _SpriteAnimation] = {}
         self._anim_timer = QTimer(self)
@@ -178,6 +190,11 @@ class GameView(QWidget):
         self._dialogue_ui_timer = QTimer(self)
         self._dialogue_ui_timer.setInterval(16)
         self._dialogue_ui_timer.timeout.connect(self._on_dialogue_ui_anim_tick)
+        self._typewriter_sfx = QSoundEffect(self)
+        self._typewriter_sfx_enabled = True
+        self._typewriter_sfx_min_interval_ms = self.TYPEWRITER_SFX_DEFAULT_MIN_INTERVAL_MS
+        self._typewriter_sfx_last_played = 0.0
+        self._setup_typewriter_sfx()
 
         self._apply_fonts()
         self._setup_z_order()
@@ -230,8 +247,58 @@ class GameView(QWidget):
 
         self.text_label.set_text_style(font_size_px=font_size, color_hex=color)
 
+    def _setup_typewriter_sfx(self) -> None:
+        self._typewriter_sfx.setLoopCount(1)
+        self._typewriter_sfx.setVolume(self.TYPEWRITER_SFX_DEFAULT_VOLUME)
+        default_sfx = asset_path("sfx", "sfx_typing.wav")
+        if default_sfx.exists():
+            self._typewriter_sfx.setSource(QUrl.fromLocalFile(str(default_sfx)))
+            return
+        self._typewriter_sfx_enabled = False
+
+    def configure_typewriter_sfx(
+        self,
+        *,
+        enabled: bool | None = None,
+        volume: float | None = None,
+        file: str | None = None,
+        folder: str | None = None,
+        min_interval_ms: int | None = None,
+    ) -> None:
+        if enabled is not None:
+            self._typewriter_sfx_enabled = bool(enabled)
+
+        if volume is not None:
+            clamped = max(0.0, min(1.0, float(volume)))
+            self._typewriter_sfx.setVolume(clamped)
+
+        if min_interval_ms is not None:
+            self._typewriter_sfx_min_interval_ms = max(0, int(min_interval_ms))
+
+        if file is not None:
+            resolved = self._resolve_audio_file(file=file, folder=folder)
+            if resolved is None:
+                print(f"[GameView] failed to resolve typewriter sfx: {file}")
+            else:
+                self._typewriter_sfx.setSource(QUrl.fromLocalFile(str(resolved)))
+                self._typewriter_sfx_enabled = True
+
+    def play_typewriter_sfx(self) -> None:
+        if not self._typewriter_sfx_enabled:
+            return
+        if self._typewriter_sfx.source().isEmpty():
+            return
+
+        now = time.monotonic()
+        elapsed_ms = (now - self._typewriter_sfx_last_played) * 1000.0
+        if elapsed_ms < float(self._typewriter_sfx_min_interval_ms):
+            return
+
+        self._typewriter_sfx_last_played = now
+        self._typewriter_sfx.play()
+
     def set_background(self, filename: str) -> None:
-        path = asset_path("backgrounds", filename)
+        path = asset_path("pic","backgrounds", filename)
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
             print(f"[GameView] failed to load background: {path}")
@@ -836,6 +903,40 @@ class GameView(QWidget):
         else:
             for image_folder in _IMAGE_SEARCH_FOLDERS:
                 paths_to_try.append(asset_path(image_folder, file))
+            paths_to_try.append(asset_path(file))
+
+        checked: set[str] = set()
+        for path in paths_to_try:
+            key = str(path)
+            if key in checked:
+                continue
+            checked.add(key)
+            if path.exists():
+                return path
+
+        assets_root = asset_path()
+        if assets_root.exists() and candidate.name:
+            for matched in assets_root.rglob(candidate.name):
+                if matched.is_file():
+                    return matched
+
+        return None
+
+    def _resolve_audio_file(self, file: str, folder: str | None = None) -> Path | None:
+        candidate = Path(file)
+        if candidate.is_absolute() and candidate.exists():
+            return candidate
+
+        paths_to_try: list[Path] = []
+        if folder:
+            folder_path = Path(folder)
+            paths_to_try.append(asset_path(*(folder_path / candidate).parts))
+
+        if len(candidate.parts) > 1:
+            paths_to_try.append(asset_path(*candidate.parts))
+        else:
+            for audio_folder in ("sfx", "audio", "sounds", "se"):
+                paths_to_try.append(asset_path(audio_folder, file))
             paths_to_try.append(asset_path(file))
 
         checked: set[str] = set()

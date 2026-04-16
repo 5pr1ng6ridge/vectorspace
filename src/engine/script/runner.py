@@ -773,6 +773,7 @@ class ScriptRunner:
         # 启动时立即显示首个单位，让 name 和首字同帧出现。
         self.current_index = self._advance_reveal_progress(self.current_index)
         self.view.show_text_segments(self.current_segments, self.current_index)
+        self.view.play_typewriter_sfx()
         self._apply_speed_changes_up_to_current_index()
 
         if self._try_pause_at_current_index():
@@ -802,6 +803,7 @@ class ScriptRunner:
 
         self.current_index = self._advance_reveal_progress(self.current_index)
         self.view.show_text_segments(self.current_segments, self.current_index)
+        self.view.play_typewriter_sfx()
         self._apply_speed_changes_up_to_current_index()
 
         if self._try_pause_at_current_index():
@@ -1042,6 +1044,46 @@ class ScriptRunner:
             self._apply_speed_changes_up_to_current_index()
         if self.type_timer.isActive():
             self.type_timer.setInterval(self.current_interval_ms_effective)
+
+        typing_sfx_enabled: bool | None = None
+        if any(k in node for k in ("sfx", "sfx_enabled", "type_sfx")):
+            typing_sfx_enabled = self._read_bool(
+                node,
+                "sfx",
+                "sfx_enabled",
+                "type_sfx",
+                default=True,
+            )
+
+        typing_sfx_volume = self._read_float(
+            node,
+            "sfx_volume",
+            "type_sfx_volume",
+        )
+        typing_sfx_file = self._read_str(
+            node,
+            "sfx_file",
+            "type_sfx_file",
+            "sfx_path",
+            "type_sfx_path",
+        )
+        typing_sfx_folder = self._read_str(
+            node,
+            "sfx_folder",
+            "type_sfx_folder",
+        )
+        typing_sfx_min_interval = self._read_int(
+            node,
+            "sfx_min_interval_ms",
+            "type_sfx_min_interval_ms",
+        )
+        self.view.configure_typewriter_sfx(
+            enabled=typing_sfx_enabled,
+            volume=typing_sfx_volume,
+            file=typing_sfx_file,
+            folder=typing_sfx_folder,
+            min_interval_ms=typing_sfx_min_interval,
+        )
 
     @staticmethod
     def _read_str(node: dict[str, Any], *keys: str) -> str | None:

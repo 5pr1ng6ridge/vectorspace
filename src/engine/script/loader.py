@@ -12,6 +12,7 @@ from ..resources.paths import script_path
 
 SceneNode = dict[str, Any]
 SceneLinearItem = SceneNode | Callable[..., Any]
+_SCENE_CACHE: dict[str, tuple[int, dict[str, Any]]] = {}
 
 
 def load_scene_script(scene_ref: str | Path) -> dict[str, Any]:
@@ -20,17 +21,27 @@ def load_scene_script(scene_ref: str | Path) -> dict[str, Any]:
         path = scene_ref
         if path.suffix.lower() != ".py":
             raise ValueError(f"仅支持 Python 场景脚本（.py）：{path}")
-        raw_data = _load_python_scene(path)
-        return _normalize_scene_data(raw_data, scene_name=path.stem)
+        return _load_cached_scene_script(path, scene_name=path.stem)
 
     if isinstance(scene_ref, str):
         path = script_path("scenes", f"{scene_ref}.py")
         if not path.exists():
             raise FileNotFoundError(f"未找到场景脚本：{path}")
-        raw_data = _load_python_scene(path)
-        return _normalize_scene_data(raw_data, scene_name=scene_ref)
+        return _load_cached_scene_script(path, scene_name=scene_ref)
 
     raise TypeError("scene_ref 必须是 str 或 Path")
+
+def _load_cached_scene_script(path: Path, *, scene_name: str) -> dict[str, Any]:
+    cache_key = str(path.resolve())
+    mtime_ns = path.stat().st_mtime_ns
+    cached = _SCENE_CACHE.get(cache_key)
+    if cached is not None and cached[0] == mtime_ns:
+        return cached[1]
+
+    raw_data = _load_python_scene(path)
+    normalized = _normalize_scene_data(raw_data, scene_name=scene_name)
+    _SCENE_CACHE[cache_key] = (mtime_ns, normalized)
+    return normalized
 
 
 def _load_python_scene(path: Path) -> Any:

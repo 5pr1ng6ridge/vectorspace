@@ -6,14 +6,13 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import (
-    QFontDatabase,
     QFont,
     QTextCursor,
     QKeyEvent,
 )
 from PySide6.QtWidgets import QPlainTextEdit
 
-from ..resources.paths import asset_path
+from ..resources.fonts import load_font_family
 
 
 
@@ -131,12 +130,9 @@ class TerminalView(QPlainTextEdit):
         """)
 
     def _load_pixel_font(self, size: int) -> QFont:
-        font_path = asset_path("fonts", "FSEX302.ttf")
-        font_id = QFontDatabase.addApplicationFont(str(font_path))
-        if font_id != -1:
-            families = QFontDatabase.applicationFontFamilies(font_id)
-            if families:
-                return QFont(families[0], size)
+        family = load_font_family("fonts", "FSEX302.ttf")
+        if family:
+            return QFont(family, size)
         return QFont("monospace", size)
 
     def _boot_text(self) -> None:

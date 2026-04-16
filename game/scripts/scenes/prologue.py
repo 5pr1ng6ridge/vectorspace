@@ -40,6 +40,12 @@ def build_scene() -> Iterator[SceneLinearItem]:
         scale=0.8,
         z=10,
     )
+    yield typing(
+        speed_ms=24,
+        sfx=True,
+        sfx_volume=.6,
+        sfx_min_interval_ms=45,
+    )
     yield dialogue_ui_hide(duration_ms=0, easing="in_circ", wait=True)
     yield dialogue_ui_show(duration_ms=400, easing="out_circ", wait=True)
     ###################

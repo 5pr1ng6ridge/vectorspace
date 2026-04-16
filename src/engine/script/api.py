@@ -46,12 +46,27 @@ def typing(
     *,
     speed_ms: int | None = None,
     cps: float | None = None,
+    sfx: bool | None = None,
+    sfx_volume: float | None = None,
+    sfx_file: str | None = None,
+    sfx_folder: str | None = None,
+    sfx_min_interval_ms: int | None = None,
 ) -> SceneNode:
     node: SceneNode = {"type": "typing"}
     if speed_ms is not None:
         node["speed_ms"] = int(speed_ms)
     if cps is not None:
         node["cps"] = float(cps)
+    if sfx is not None:
+        node["sfx"] = bool(sfx)
+    if sfx_volume is not None:
+        node["sfx_volume"] = float(sfx_volume)
+    if sfx_file is not None:
+        node["sfx_file"] = sfx_file
+    if sfx_folder is not None:
+        node["sfx_folder"] = sfx_folder
+    if sfx_min_interval_ms is not None:
+        node["sfx_min_interval_ms"] = int(sfx_min_interval_ms)
     return node
 
 
