@@ -23,10 +23,12 @@ class ScriptRunner:
         view: GameView,
         script_data: dict[str, Any],
         on_jump: Callable[[str], None] | None = None,
+        on_node: Callable[[str, dict[str, Any], int], None] | None = None,
     ) -> None:
         self.view = view
         self.script_data = script_data
         self._on_jump = on_jump
+        self._on_node = on_node
         self._disposed = False
         self.flow: list[str] = script_data.get("flow", [])
         self.nodes: dict[str, dict[str, Any]] = script_data.get("nodes", {})
@@ -133,6 +135,11 @@ class ScriptRunner:
         node_id = self.flow[self.index]
         node = self.nodes.get(node_id, {})
         node_type = node.get("type")
+        if self._on_node is not None:
+            try:
+                self._on_node(node_id, node, self.index)
+            except Exception as exc:
+                print(f"[ScriptRunner] on_node failed: {node_id} ({exc})")
 
         if node_type == "say":
             self._start_typewriter(node.get("text", ""))

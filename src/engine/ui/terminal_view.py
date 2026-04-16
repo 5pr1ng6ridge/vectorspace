@@ -9,6 +9,8 @@ from PySide6.QtGui import (
     QFont,
     QTextCursor,
     QKeyEvent,
+    QMouseEvent,
+    QTextOption,
 )
 from PySide6.QtWidgets import QPlainTextEdit
 
@@ -77,17 +79,19 @@ class TerminalView(QPlainTextEdit):
     """
     startGameRequested = Signal()
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, history_mode: bool = False) -> None:
         super().__init__(parent)
+        self._history_mode = bool(history_mode)
 
         # 样式
         self.setReadOnly(False)
         self.setUndoRedoEnabled(False)
-        self.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapAnywhere)
 
         self._prompt: str = "[VECTSPACE@system: ~]$ "
         self._input_start_pos: int = 0  # 当前输入行的开始位置（在整个文本中的下标）
-        self._accept_input: bool = True
+        self._accept_input: bool = not self._history_mode
 
         # 历史
         self._history: List[str] = []
@@ -101,13 +105,17 @@ class TerminalView(QPlainTextEdit):
         self._queue_running: bool = False
         
         self._apply_style()
-        self._boot_text()
+        if self._history_mode:
+            self.setReadOnly(True)
+            self.print_block("[ScriptHistory] ready.")
+        else:
+            self._boot_text()
         
         
         
         
     def _apply_style(self) -> None:
-        font = self._load_pixel_font(28)
+        font = self._load_pixel_font(19)
         self.setFont(font)
 
         self.setStyleSheet("""
@@ -130,9 +138,26 @@ class TerminalView(QPlainTextEdit):
         """)
 
     def _load_pixel_font(self, size: int) -> QFont:
-        family = load_font_family("fonts", "FSEX302.ttf")
-        if family:
-            return QFont(family, size)
+        primary_family = load_font_family("fonts", "FSEX302.ttf")
+        fallback_family = load_font_family(
+            "fonts",
+            "fusion-pixel-12px-monospaced-zh_hans.ttf",
+        )
+
+        families: list[str] = []
+        if primary_family:
+            families.append(primary_family)
+        if fallback_family and fallback_family not in families:
+            families.append(fallback_family)
+
+        if families:
+            font = QFont()
+            font.setPointSize(size)
+            font.setFamilies(families)
+            return font
+
+        if fallback_family:
+            return QFont(fallback_family, size)
         return QFont("monospace", size)
 
     def _boot_text(self) -> None:
@@ -210,16 +235,39 @@ class TerminalView(QPlainTextEdit):
             return ""
         return full[self._input_start_pos:].rstrip("\n")
 
+    def _move_cursor_to_input_end(self) -> None:
+        """把光标钉在当前输入区末尾。"""
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        if cursor.position() < self._input_start_pos:
+            cursor.setPosition(self._input_start_pos)
+        self.setTextCursor(cursor)
+
+    def _append_newline_at_end(self) -> None:
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.setTextCursor(cursor)
+        cursor.insertText("\n")
+        self._scroll_to_bottom()
+
     def _finish_terminal_sequence(self) -> None:
         self._accept_input = True
         self._insert_prompt()
 
     def _jump_to_gameview(self) -> None:
         self.startGameRequested.emit()
+
+    def append_history(self, text: str) -> None:
+        if not isinstance(text, str):
+            text = str(text)
+        self.print_block(text)
     
     # ---------------- 键盘事件重写：实现终端行为 ----------------
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self._history_mode:
+            event.ignore()
+            return
         if not self._accept_input:
             # 读条时禁用输入（你喜欢也可以允许 Ctrl+C 之类的）
             return
@@ -260,9 +308,11 @@ class TerminalView(QPlainTextEdit):
 
         # Enter：提交命令
         if key in (Qt.Key_Return, Qt.Key_Enter):
+            # 终端回车总是提交整行，不在中间断开右侧文本
+            self._move_cursor_to_input_end()
             command = self._current_input_text()
-            # 先插入换行，让这一行固定下来
-            super().keyPressEvent(event)
+            # 先在末尾插入换行，让这一行固定下来
+            self._append_newline_at_end()
 
             # 存历史
             cmd_stripped = command.strip()
@@ -278,6 +328,17 @@ class TerminalView(QPlainTextEdit):
 
         # 其他按键：正常处理（文本输入）
         super().keyPressEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        # 禁止鼠标点击改变光标位置（保留焦点）
+        self.setFocus(Qt.MouseFocusReason)
+        self._move_cursor_to_input_end()
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        self.setFocus(Qt.MouseFocusReason)
+        self._move_cursor_to_input_end()
+        event.accept()
 
     # ---------------- 历史操作 ----------------
 

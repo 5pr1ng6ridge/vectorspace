@@ -26,5 +26,5 @@ def run() -> None:
         app.setFont(QFont(family, 20))
 
     win = GameWindow()
-    win.show()#FullScreen() 
+    win.showFullScreen()
     sys.exit(app.exec())
