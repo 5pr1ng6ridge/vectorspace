@@ -39,7 +39,7 @@ def build_scene() -> Iterator[SceneLinearItem]:
         x=1260,
         y=1000,
         scale=0.8,
-        z=10,
+        z=10,above_web=True
     )
     yield typing(
         speed_ms=24,

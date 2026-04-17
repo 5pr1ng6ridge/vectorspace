@@ -237,7 +237,6 @@ class GameView(QWidget):
         self.ui_overlay.raise_()
         self.name_label.raise_()
         self.text_label.raise_()
-        self._refresh_above_web_stack()
         self._scene_noise_overlay.raise_()
         self._pause_overlay.raise_()
 
@@ -513,8 +512,6 @@ class GameView(QWidget):
             view.setAttribute(Qt.WA_TranslucentBackground)
             view.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             view.setAttribute(Qt.WA_AlwaysStackOnTop, bool(initial_above_web))
-            if initial_above_web:
-                view.setAttribute(Qt.WA_NativeWindow, True)
             view.setFont(QFont(self.text_label.font()))
             effect = QGraphicsOpacityEffect(view)
             view.setGraphicsEffect(effect)
@@ -786,8 +783,6 @@ class GameView(QWidget):
             effect = QGraphicsOpacityEffect(label)
             label.setGraphicsEffect(effect)
             label.setAttribute(Qt.WA_AlwaysStackOnTop, bool(initial_above_web))
-            if initial_above_web:
-                label.setAttribute(Qt.WA_NativeWindow, True)
 
             state = _SpriteState(
                 image_id=sprite_id,
@@ -1051,8 +1046,6 @@ class GameView(QWidget):
             state.label.setParent(parent_widget)
 
         state.label.setAttribute(Qt.WA_AlwaysStackOnTop, target)
-        if target:
-            state.label.setAttribute(Qt.WA_NativeWindow, True)
         state.above_web = target
 
     def _set_extra_textbox_above_web(
@@ -1067,8 +1060,6 @@ class GameView(QWidget):
             state.view.setParent(parent_widget)
 
         state.view.setAttribute(Qt.WA_AlwaysStackOnTop, target)
-        if target:
-            state.view.setAttribute(Qt.WA_NativeWindow, True)
         state.above_web = target
 
     def _resolve_asset_file(self, file: str, folder: str | None = None) -> Path | None:
@@ -1469,29 +1460,11 @@ class GameView(QWidget):
 
     def _refresh_sprite_stack(self) -> None:
         for state in sorted(self._sprites.values(), key=lambda item: item.z):
-            if state.above_web:
-                continue
             state.label.raise_()
-        self._refresh_above_web_stack()
 
     def _refresh_extra_textboxes_stack(self) -> None:
         for state in sorted(self._extra_textboxes.values(), key=lambda item: item.z):
-            if state.above_web:
-                continue
             state.view.raise_()
-        self._refresh_above_web_stack()
-
-    def _refresh_above_web_stack(self) -> None:
-        overlay_widgets: list[tuple[int, int, QWidget]] = []
-        for state in self._sprites.values():
-            if state.above_web:
-                overlay_widgets.append((state.z, 0, state.label))
-        for state in self._extra_textboxes.values():
-            if state.above_web:
-                overlay_widgets.append((state.z, 1, state.view))
-
-        for _, _, widget in sorted(overlay_widgets, key=lambda item: (item[0], item[1])):
-            widget.raise_()
 
     def _make_easing_curve(self, easing_name: str) -> QEasingCurve:
         easing_type = _EASING_MAP.get(
