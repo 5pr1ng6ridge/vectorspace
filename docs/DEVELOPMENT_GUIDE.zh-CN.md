@@ -458,3 +458,109 @@ def build_scene():
     yield textbox_transform("hint", dy=30, duration_ms=180, easing="in_out_sine")
     yield textbox_hide("hint", duration_ms=180, easing="in_quad")
 ```
+
+## 14. 存档系统（SaveSystem）
+
+存档由 `SaveSystem + SceneManager` 协作完成：
+
+- `SaveSystem` 负责槽位文件读写（默认目录：`game/saves/`）。
+- `SceneManager.create_save_payload()` 导出当前场景快照。
+- `SceneManager.load_save_payload()` 恢复场景快照与持久化变量。
+
+### 14.1 槽位与文件
+
+- 槽位数固定为 30（`slot_01.json` ~ `slot_30.json`）。
+- 默认存档目录：`game/saves/`。
+- 写入时会自动补齐：`slot_index`、`title`、`saved_at`。
+
+### 14.2 存档 payload 结构
+
+```json
+{
+  "scene_name": "prologue",
+  "runner_state": {
+    "scene_name": "prologue",
+    "index": 12,
+    "resume_mode": "say_wait"
+  },
+  "persistent_state": {
+    "route": "A",
+    "met_epsilon": true,
+    "loop_count": 3
+  }
+}
+```
+
+说明：
+
+- `runner_state` 用于恢复当前流程位置。
+- `persistent_state` 会在读档时同步恢复。
+
+### 14.3 运行时入口
+
+- 在 `GameView` 激活时按 `S` 打开存档界面（见 `window.py` 事件过滤逻辑）。
+- 在存档界面里可执行保存与读取。
+
+## 15. 持久化变量（persistent_state）
+
+`persistent_state` 是跨场景共享、且会进入存档的字典，挂在 `ScriptRunner.persistent_state`。
+
+脚本 API（`src/engine/script/api.py`）：
+
+- `persistent_set(key, value)`
+- `persistent_update(values)`
+- `persistent_delete(key)`
+- `persistent_clear()`
+
+这些节点都属于即时节点：执行完会直接进入下一节点。
+
+### 15.1 脚本示例
+
+```python
+from src.engine.script.api import call, persistent_set, persistent_update, say
+
+
+def _log_route(runner):
+    route = runner.persistent_state.get("route", "unknown")
+    runner._run_terminal_write_node({"text": f"[route]={route}", "end": "\n"})
+
+
+def build_scene():
+    yield persistent_set("met_epsilon", True)
+    yield persistent_update({"route": "A", "loop_count": 1})
+    yield say("System", "已写入持久化变量。")
+    yield call(_log_route)
+```
+
+### 15.2 在 callback 中读取并分支
+
+```python
+from src.engine.script.api import call
+
+
+def _branch(runner):
+    if runner.persistent_state.get("met_epsilon"):
+        runner.jump("Ch1/loop1")
+
+
+def build_scene():
+    yield call(_branch)
+```
+
+## 16. `above_web` 说明（图片/额外文本框）
+
+`image_*` 与 `textbox_*` 系列节点都支持 `above_web`（别名：`overlay` / `on_top` / `topmost`）。
+
+- `above_web=False`（默认）：渲染在 Web 对话层下方。
+- `above_web=True`：渲染在 Web 对话层上方，适合遮罩、前景特效、覆盖层提示。
+
+示例：
+
+```python
+from src.engine.script.api import image_show, textbox_show
+
+
+def build_scene():
+    yield image_show("mask", above_web=True, opacity=0.75, duration_ms=150)
+    yield textbox_show("hint", above_web=True, text="顶部提示", opacity=1.0)
+```

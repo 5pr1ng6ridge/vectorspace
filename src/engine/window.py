@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QTimer, Qt
 from PySide6.QtGui import QCloseEvent, QKeyEvent, QKeySequence, QShortcut
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QWidget
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget, QWidget
 
+from .save_system import SaveSystem
 from .scene_manager import SceneManager
 from .ui.game_view import GameView
+from .ui.save_slot_view import SaveSlotView
 from .ui.terminal_view import TerminalView
 
 
 class GameWindow(QMainWindow):
     """终端主窗口；游戏窗口按需创建。"""
+
     MESSAGE_BOX_FONT_SIZE_PT = 16
     ENTER_GAME_AFTER_LOAD_DELAY_MS = 80
 
@@ -22,8 +25,18 @@ class GameWindow(QMainWindow):
         self.setWindowTitle("VECTSPACE Terminal")
         self.resize(1280, 720)
 
+        self._stack = QStackedWidget(self)
+        self.setCentralWidget(self._stack)
+
         self.terminal_view = TerminalView(self, history_mode=False)
-        self.setCentralWidget(self.terminal_view)
+        self.save_slot_view = SaveSlotView(self)
+        self._stack.addWidget(self.terminal_view)
+        self._stack.addWidget(self.save_slot_view)
+        self._stack.setCurrentWidget(self.terminal_view)
+
+        self._save_system = SaveSystem()
+        self._save_ui_active = False
+        self._resume_game_after_save_ui = False
 
         self._game_window: QMainWindow | None = None
         self._game_view: GameView | None = None
@@ -36,12 +49,18 @@ class GameWindow(QMainWindow):
 
         self.terminal_view.startGameRequested.connect(self.enter_game)
         self.terminal_view.collapseRequested.connect(self._collapse_terminal_below_game)
+        self.save_slot_view.closeRequested.connect(self._close_save_ui)
+        self.save_slot_view.saveRequested.connect(self._save_to_slot)
+        self.save_slot_view.loadRequested.connect(self._load_from_slot)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._show_confirm_dialog(
             parent=self,
             title=" ",
-            text="确定要关闭 world2vec_Terminal 吗？\n这将关闭所有连接，未保存的数据将会丢失。",
+            text=(
+                "确定要关闭 world2vec_Terminal 吗？\n"
+                "这将关闭所有连接，未保存的数据将会丢失。"
+            ),
         ):
             event.ignore()
             return
@@ -61,13 +80,11 @@ class GameWindow(QMainWindow):
         def _after_scene_loaded() -> None:
             if self._game_window is None:
                 return
-            # scene 准备后立刻显示 GameView，不让 timer 影响场景进入。
             self._game_window.showFullScreen()
             self._game_window.raise_()
             self._game_window.activateWindow()
             self.terminal_view.set_collapse_on_down_enabled(True)
             self._focus_game_view()
-            # timer 仅用于延迟 Terminal 缩小/下沉。
             QTimer.singleShot(
                 self.ENTER_GAME_AFTER_LOAD_DELAY_MS,
                 self._finish_enter_game_transition,
@@ -149,6 +166,70 @@ class GameWindow(QMainWindow):
         self._game_window.activateWindow()
         self._focus_game_view()
 
+    def _open_save_ui(self) -> None:
+        if self._save_ui_active:
+            return
+        if self._game_window is None or not self._game_window.isVisible():
+            return
+
+        self._save_ui_active = True
+        self._resume_game_after_save_ui = (
+            self._game_view is not None and not self._game_view.is_paused()
+        )
+        if self._game_view is not None:
+            self._game_view.set_paused(True)
+
+        self._refresh_save_slots()
+        self._stack.setCurrentWidget(self.save_slot_view)
+        self.showFullScreen()
+        self.raise_()
+        self.activateWindow()
+        self.save_slot_view.setFocus(Qt.ActiveWindowFocusReason)
+
+    def _close_save_ui(self) -> None:
+        if not self._save_ui_active:
+            return
+
+        self._save_ui_active = False
+        self._stack.setCurrentWidget(self.terminal_view)
+        self._set_terminal_windowed_after_start()
+        self.lower()
+
+        if self._game_view is not None and self._resume_game_after_save_ui:
+            self._game_view.set_paused(False)
+        self._resume_game_after_save_ui = False
+
+        if self._game_window is not None and self._game_window.isVisible():
+            self._game_window.raise_()
+            self._game_window.activateWindow()
+            self._focus_game_view()
+
+    def _refresh_save_slots(self) -> None:
+        self.save_slot_view.set_slots(self._save_system.list_slots())
+
+    def _save_to_slot(self, slot_index: int) -> None:
+        if self._scene_manager is None:
+            return
+
+        payload = self._scene_manager.create_save_payload()
+        if payload is None:
+            return
+
+        payload["title"] = f"Archive Slot {slot_index + 1:02d}"
+        self._save_system.save_slot(slot_index, payload)
+        self._refresh_save_slots()
+
+    def _load_from_slot(self, slot_index: int) -> None:
+        if self._scene_manager is None:
+            return
+
+        payload = self._save_system.load_slot(slot_index)
+        if payload is None:
+            return
+
+        if self._scene_manager.load_save_payload(payload):
+            self._close_save_ui()
+
     def _show_confirm_dialog(
         self,
         *,
@@ -184,7 +265,7 @@ class GameWindow(QMainWindow):
         return self._show_confirm_dialog(
             parent=self._game_window,
             title="关闭游戏",
-            text="确定要关闭与woRld的连接吗？未保存的数据将会丢失。",
+            text="确定要关闭与 world 的连接吗？未保存的数据将会丢失。",
         )
 
     def _on_game_window_closed(self) -> None:
@@ -194,6 +275,9 @@ class GameWindow(QMainWindow):
         if self._game_window is not None and self._game_window.isVisible():
             return
 
+        self._save_ui_active = False
+        self._resume_game_after_save_ui = False
+        self._stack.setCurrentWidget(self.terminal_view)
         self.terminal_view.set_collapse_on_down_enabled(False)
         self.showFullScreen()
         self.raise_()
@@ -225,7 +309,6 @@ class GameWindow(QMainWindow):
                 event.ignore()
                 return True
 
-            # 等 closeEvent 真正处理完成后再恢复 Terminal 视图状态。
             QTimer.singleShot(0, self._on_game_window_closed)
             return False
 
@@ -234,6 +317,9 @@ class GameWindow(QMainWindow):
             self._game_view,
         }:
             if isinstance(event, QKeyEvent):
+                if event.modifiers() == Qt.NoModifier and event.key() == Qt.Key_S:
+                    self._open_save_ui()
+                    return True
                 if event.key() == Qt.Key_Up:
                     self._bring_terminal_above_game()
                     return True

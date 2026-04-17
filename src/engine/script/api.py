@@ -167,6 +167,22 @@ def call(fn: SceneCallable) -> SceneNode:
     return _node("call", fn=fn)
 
 
+def persistent_set(key: str, value: Any) -> SceneNode:
+    return _node("persistent_set", key=str(key), value=value)
+
+
+def persistent_update(values: dict[str, Any]) -> SceneNode:
+    return _node("persistent_update", values=dict(values))
+
+
+def persistent_delete(key: str) -> SceneNode:
+    return _node("persistent_delete", key=str(key))
+
+
+def persistent_clear() -> SceneNode:
+    return _node("persistent_clear")
+
+
 def jump(scene_name: str) -> SceneNode:
     return _node("jump", scene=scene_name)
 
@@ -271,6 +287,7 @@ def textbox_register(
     scale: float | None = None,
     opacity: float | None = None,
     z: int | None = None,
+    above_web: bool | None = None,
     visible: bool = False,
 ) -> SceneNode:
     node = _node(
@@ -286,6 +303,7 @@ def textbox_register(
     _set_optional(node, "pos_x", x, caster=float)
     _set_optional(node, "pos_y", y, caster=float)
     _apply_visual_fields(node, scale=scale, opacity=opacity, z=z)
+    _set_optional(node, "above_web", above_web, caster=bool)
     return node
 
 
@@ -316,6 +334,7 @@ def textbox_show(
     opacity: float | None = None,
     dopacity: float | None = None,
     z: int | None = None,
+    above_web: bool | None = None,
     duration_ms: int | None = None,
     easing: str | None = None,
     wait: bool = False,
@@ -331,6 +350,7 @@ def textbox_show(
         dopacity=dopacity,
         z=z,
     )
+    _set_optional(node, "above_web", above_web, caster=bool)
     _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
@@ -371,6 +391,7 @@ def textbox_transform(
     opacity: float | None = None,
     dopacity: float | None = None,
     z: int | None = None,
+    above_web: bool | None = None,
     duration_ms: int | None = None,
     easing: str | None = None,
     wait: bool = False,
@@ -385,6 +406,7 @@ def textbox_transform(
         dopacity=dopacity,
         z=z,
     )
+    _set_optional(node, "above_web", above_web, caster=bool)
     _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
@@ -437,6 +459,7 @@ def image_register(
     z: int | None = None,
     anchor_x: float | None = None,
     anchor_y: float | None = None,
+    above_web: bool | None = None,
     visible: bool = False,
 ) -> SceneNode:
     node = _node(
@@ -450,6 +473,7 @@ def image_register(
     _apply_visual_fields(node, scale=scale, opacity=opacity, z=z)
     _set_optional(node, "anchor_x", anchor_x, caster=float)
     _set_optional(node, "anchor_y", anchor_y, caster=float)
+    _set_optional(node, "above_web", above_web, caster=bool)
     return node
 
 
@@ -467,6 +491,7 @@ def image_show(
     opacity: float | None = None,
     dopacity: float | None = None,
     z: int | None = None,
+    above_web: bool | None = None,
     duration_ms: int | None = None,
     easing: str | None = None,
     wait: bool = False,
@@ -483,6 +508,7 @@ def image_show(
         dopacity=dopacity,
         z=z,
     )
+    _set_optional(node, "above_web", above_web, caster=bool)
     _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
@@ -523,6 +549,7 @@ def image_transform(
     opacity: float | None = None,
     dopacity: float | None = None,
     z: int | None = None,
+    above_web: bool | None = None,
     duration_ms: int | None = None,
     easing: str | None = None,
     wait: bool = False,
@@ -537,6 +564,7 @@ def image_transform(
         dopacity=dopacity,
         z=z,
     )
+    _set_optional(node, "above_web", above_web, caster=bool)
     _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 

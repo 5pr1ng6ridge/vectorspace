@@ -64,6 +64,7 @@ class _SpriteState:
     z: int = 0
     anchor_x: float = 0.5
     anchor_y: float = 1.0
+    above_web: bool = False
     visible: bool = False
     scaled_size: tuple[int, int] | None = None
     scaled_pixmap: QPixmap | None = None
@@ -113,6 +114,7 @@ class _ExtraTextBoxState:
     scale: float = 1.0
     opacity: float = 1.0
     z: int = 0
+    above_web: bool = False
     visible: bool = False
 
 
@@ -179,6 +181,7 @@ class GameView(QWidget):
         self.text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._pause_overlay = QLabel(self)
         self._pause_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._pause_overlay.setAttribute(Qt.WA_AlwaysStackOnTop, True)
         self._pause_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 160);")
         self._pause_overlay.hide()
         self._paused = False
@@ -234,6 +237,7 @@ class GameView(QWidget):
         self.ui_overlay.raise_()
         self.name_label.raise_()
         self.text_label.raise_()
+        self._refresh_above_web_stack()
         self._scene_noise_overlay.raise_()
         self._pause_overlay.raise_()
 
@@ -380,11 +384,6 @@ class GameView(QWidget):
             self._dialogue_ui_timer.stop()
             self._scene_noise_timer.stop()
 
-            # WebEngine 子控件会盖过普通遮罩，暂停时改为单独变暗文本层。
-            self.text_label.set_pause_dim(True)
-            for state in self._extra_textboxes.values():
-                state.view.set_pause_dim(True)
-
             self._pause_overlay.setVisible(True)
             self._pause_overlay.raise_()
             self.pauseStateChanged.emit(True)
@@ -407,10 +406,6 @@ class GameView(QWidget):
             self._dialogue_ui_timer.start()
         if self._paused_scene_noise_timer_was_active and self._scene_noise_overlay.isVisible():
             self._scene_noise_timer.start()
-
-        self.text_label.set_pause_dim(False)
-        for state in self._extra_textboxes.values():
-            state.view.set_pause_dim(False)
 
         self._paused_anim_timer_was_active = False
         self._paused_extra_textbox_timer_was_active = False
@@ -495,6 +490,7 @@ class GameView(QWidget):
         scale: float | None = None,
         opacity: float | None = None,
         z: int | None = None,
+        above_web: bool | None = None,
         text: str | None = None,
         font_size: int | None = None,
         color: str | None = None,
@@ -511,9 +507,14 @@ class GameView(QWidget):
 
         state = self._extra_textboxes.get(key)
         if state is None:
-            view = DialogueTextView(self.sprite_root)
+            initial_above_web = bool(above_web) if above_web is not None else False
+            parent_widget: QWidget = self if initial_above_web else self.sprite_root
+            view = DialogueTextView(parent_widget)
             view.setAttribute(Qt.WA_TranslucentBackground)
             view.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            view.setAttribute(Qt.WA_AlwaysStackOnTop, bool(initial_above_web))
+            if initial_above_web:
+                view.setAttribute(Qt.WA_NativeWindow, True)
             view.setFont(QFont(self.text_label.font()))
             effect = QGraphicsOpacityEffect(view)
             view.setGraphicsEffect(effect)
@@ -527,6 +528,7 @@ class GameView(QWidget):
                 rect_h=rect_h_value,
                 x=float(rect_x),
                 y=float(rect_y),
+                above_web=initial_above_web,
                 visible=bool(visible),
             )
             self._extra_textboxes[key] = state
@@ -548,11 +550,12 @@ class GameView(QWidget):
             state.opacity = self._clamp_opacity(opacity)
         if z is not None:
             state.z = int(z)
+        if above_web is not None:
+            self._set_extra_textbox_above_web(state, bool(above_web))
         if text is not None:
             state.view.set_plain_dialogue(text)
         if font_size is not None or color is not None:
             state.view.set_text_style(font_size_px=font_size, color_hex=color)
-        state.view.set_pause_dim(self._paused)
 
         self._apply_extra_textbox_state(state)
         self._refresh_extra_textboxes_stack()
@@ -590,6 +593,7 @@ class GameView(QWidget):
         opacity: float | None = None,
         dopacity: float | None = None,
         z: int | None = None,
+        above_web: bool | None = None,
         duration_ms: int = 0,
         easing: str = "linear",
         on_finished: Callable[[], None] | None = None,
@@ -604,6 +608,9 @@ class GameView(QWidget):
             state.view.set_text_style(font_size_px=font_size, color_hex=color)
         if z is not None:
             state.z = int(z)
+            self._refresh_extra_textboxes_stack()
+        if above_web is not None:
+            self._set_extra_textbox_above_web(state, bool(above_web))
             self._refresh_extra_textboxes_stack()
 
         target_x, target_y, target_scale, target_opacity = self._resolve_targets(
@@ -683,6 +690,7 @@ class GameView(QWidget):
         opacity: float | None = None,
         dopacity: float | None = None,
         z: int | None = None,
+        above_web: bool | None = None,
         duration_ms: int = 0,
         easing: str = "linear",
         on_finished: Callable[[], None] | None = None,
@@ -693,6 +701,9 @@ class GameView(QWidget):
 
         if z is not None:
             state.z = int(z)
+            self._refresh_extra_textboxes_stack()
+        if above_web is not None:
+            self._set_extra_textbox_above_web(state, bool(above_web))
             self._refresh_extra_textboxes_stack()
 
         target_x, target_y, target_scale, target_opacity = self._resolve_targets(
@@ -752,6 +763,7 @@ class GameView(QWidget):
         z: int | None = None,
         anchor_x: float | None = None,
         anchor_y: float | None = None,
+        above_web: bool | None = None,
         visible: bool = False,
     ) -> bool:
         sprite_id = image_id.strip()
@@ -765,11 +777,17 @@ class GameView(QWidget):
 
         state = self._sprites.get(sprite_id)
         if state is None:
-            label = QLabel(self.sprite_root)
+            initial_above_web = bool(above_web) if above_web is not None else False
+            parent_widget: QWidget = self if initial_above_web else self.sprite_root
+            label = QLabel(parent_widget)
             label.setAttribute(Qt.WA_TranslucentBackground)
+            label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             label.setScaledContents(True)
             effect = QGraphicsOpacityEffect(label)
             label.setGraphicsEffect(effect)
+            label.setAttribute(Qt.WA_AlwaysStackOnTop, bool(initial_above_web))
+            if initial_above_web:
+                label.setAttribute(Qt.WA_NativeWindow, True)
 
             state = _SpriteState(
                 image_id=sprite_id,
@@ -777,6 +795,7 @@ class GameView(QWidget):
                 opacity_effect=effect,
                 pixmap=pixmap,
                 source=resolved_source,
+                above_web=initial_above_web,
                 visible=bool(visible),
             )
             self._sprites[sprite_id] = state
@@ -802,6 +821,8 @@ class GameView(QWidget):
             state.anchor_x = float(anchor_x)
         if anchor_y is not None:
             state.anchor_y = float(anchor_y)
+        if above_web is not None:
+            self._set_sprite_above_web(state, bool(above_web))
 
         self._refresh_sprite_stack()
         self._apply_sprite_state(state)
@@ -843,6 +864,7 @@ class GameView(QWidget):
         opacity: float | None = None,
         dopacity: float | None = None,
         z: int | None = None,
+        above_web: bool | None = None,
         file: str | None = None,
         folder: str | None = None,
         duration_ms: int = 0,
@@ -860,6 +882,8 @@ class GameView(QWidget):
         if z is not None:
             state.z = int(z)
             self._refresh_sprite_stack()
+        if above_web is not None:
+            self._set_sprite_above_web(state, bool(above_web))
 
         target_x, target_y, target_scale, target_opacity = self._resolve_targets(
             state,
@@ -939,6 +963,7 @@ class GameView(QWidget):
         opacity: float | None = None,
         dopacity: float | None = None,
         z: int | None = None,
+        above_web: bool | None = None,
         duration_ms: int = 0,
         easing: str = "linear",
         on_finished: Callable[[], None] | None = None,
@@ -950,6 +975,8 @@ class GameView(QWidget):
         if z is not None:
             state.z = int(z)
             self._refresh_sprite_stack()
+        if above_web is not None:
+            self._set_sprite_above_web(state, bool(above_web))
 
         target_x, target_y, target_scale, target_opacity = self._resolve_targets(
             state,
@@ -1013,6 +1040,36 @@ class GameView(QWidget):
             return None
 
         return pixmap, str(resolved)
+
+    def _set_sprite_above_web(self, state: _SpriteState, enabled: bool) -> None:
+        target = bool(enabled)
+        if state.above_web == target:
+            return
+
+        parent_widget: QWidget = self if target else self.sprite_root
+        if state.label.parentWidget() is not parent_widget:
+            state.label.setParent(parent_widget)
+
+        state.label.setAttribute(Qt.WA_AlwaysStackOnTop, target)
+        if target:
+            state.label.setAttribute(Qt.WA_NativeWindow, True)
+        state.above_web = target
+
+    def _set_extra_textbox_above_web(
+        self, state: _ExtraTextBoxState, enabled: bool
+    ) -> None:
+        target = bool(enabled)
+        if state.above_web == target:
+            return
+
+        parent_widget: QWidget = self if target else self.sprite_root
+        if state.view.parentWidget() is not parent_widget:
+            state.view.setParent(parent_widget)
+
+        state.view.setAttribute(Qt.WA_AlwaysStackOnTop, target)
+        if target:
+            state.view.setAttribute(Qt.WA_NativeWindow, True)
+        state.above_web = target
 
     def _resolve_asset_file(self, file: str, folder: str | None = None) -> Path | None:
         return self._resolve_cached_file(
@@ -1412,11 +1469,29 @@ class GameView(QWidget):
 
     def _refresh_sprite_stack(self) -> None:
         for state in sorted(self._sprites.values(), key=lambda item: item.z):
+            if state.above_web:
+                continue
             state.label.raise_()
+        self._refresh_above_web_stack()
 
     def _refresh_extra_textboxes_stack(self) -> None:
         for state in sorted(self._extra_textboxes.values(), key=lambda item: item.z):
+            if state.above_web:
+                continue
             state.view.raise_()
+        self._refresh_above_web_stack()
+
+    def _refresh_above_web_stack(self) -> None:
+        overlay_widgets: list[tuple[int, int, QWidget]] = []
+        for state in self._sprites.values():
+            if state.above_web:
+                overlay_widgets.append((state.z, 0, state.label))
+        for state in self._extra_textboxes.values():
+            if state.above_web:
+                overlay_widgets.append((state.z, 1, state.view))
+
+        for _, _, widget in sorted(overlay_widgets, key=lambda item: (item[0], item[1])):
+            widget.raise_()
 
     def _make_easing_curve(self, easing_name: str) -> QEasingCurve:
         easing_type = _EASING_MAP.get(

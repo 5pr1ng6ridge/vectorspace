@@ -29,6 +29,7 @@ class ScriptRunner:
         on_node: Callable[[str, dict[str, Any], int], None] | None = None,
         on_terminal_write: Callable[[str], None] | None = None,
         on_close_game: Callable[[bool], None] | None = None,
+        persistent_state: dict[str, Any] | None = None,
     ) -> None:
         self.view = view
         self.script_data = script_data
@@ -37,6 +38,10 @@ class ScriptRunner:
         self._on_terminal_write = on_terminal_write
         self._on_close_game = on_close_game
         self._disposed = False
+        self.persistent_state = (
+            persistent_state if isinstance(persistent_state, dict) else {}
+        )
+        self.scene_name = str(script_data.get("id", "")).strip()
         self.flow: list[str] = script_data.get("flow", [])
         self.nodes: dict[str, dict[str, Any]] = script_data.get("nodes", {})
 
@@ -90,6 +95,10 @@ class ScriptRunner:
             "extra_textbox_remove": self._run_textbox_remove_node,
             "textbox_clear": self._run_textbox_clear_node,
             "extra_textbox_clear": self._run_textbox_clear_node,
+            "persistent_set": self._run_persistent_set_node,
+            "persistent_update": self._run_persistent_update_node,
+            "persistent_delete": self._run_persistent_delete_node,
+            "persistent_clear": self._run_persistent_clear_node,
             "call": self._run_call_node,
             "terminal_write": self._run_terminal_write_node,
             "terminal_log": self._run_terminal_write_node,
@@ -128,13 +137,8 @@ class ScriptRunner:
     def start(self) -> None:
         if self._disposed:
             return
+        self._reset_runtime_state()
         self.index = 0
-        self.waiting_for_click = False
-        self.typing = False
-        self.waiting_for_node_animation = False
-        self.waiting_for_node_wait = False
-        self.waiting_for_pause = False
-        self.node_wait_timer.stop()
         self._show_current_node()
 
     def dispose(self) -> None:
@@ -175,6 +179,62 @@ class ScriptRunner:
             print(f"[ScriptRunner] jump failed: {target} ({exc})")
             return False
         return True
+
+    def snapshot_state(self) -> dict[str, Any]:
+        resume_index = min(max(0, int(self.index)), len(self.flow))
+        resume_mode = "node"
+
+        if resume_index >= len(self.flow):
+            resume_mode = "finished"
+        else:
+            node_type = self._node_type_at(resume_index)
+            if self.waiting_for_node_animation or self.waiting_for_node_wait:
+                resume_index = min(resume_index + 1, len(self.flow))
+                resume_mode = "node" if resume_index < len(self.flow) else "finished"
+            elif node_type == "say" and (
+                self.typing or self.waiting_for_click or self.waiting_for_pause
+            ):
+                resume_mode = "say_wait"
+            elif node_type == "formula" and self.waiting_for_click:
+                resume_mode = "formula_wait"
+            elif node_type in {"wait_click", "click_wait", "gap", "interval", "beat"}:
+                resume_mode = "wait_click"
+
+        return {
+            "scene_name": self.scene_name,
+            "index": resume_index,
+            "resume_mode": resume_mode,
+        }
+
+    def restore_from_snapshot(self, snapshot: dict[str, Any]) -> None:
+        if self._disposed:
+            return
+
+        target_index = self._snapshot_index(snapshot)
+        resume_mode = str(snapshot.get("resume_mode", "node")).strip().lower()
+
+        self._reset_runtime_state()
+        self._rebuild_scene_state(target_index)
+
+        if resume_mode == "finished" or target_index >= len(self.flow):
+            self.index = len(self.flow)
+            self._finish_script()
+            return
+
+        self.index = target_index
+        node = self.nodes.get(self.flow[self.index], {})
+
+        if resume_mode == "say_wait":
+            self._restore_say_wait(node)
+            return
+        if resume_mode == "formula_wait":
+            self._restore_formula_wait(node)
+            return
+        if resume_mode == "wait_click":
+            self._run_wait_click_node()
+            return
+
+        self._show_current_node()
 
     def _show_current_node(self) -> None:
         """显示当前节点；必要时自动跳转到下一个节点。"""
@@ -239,6 +299,130 @@ class ScriptRunner:
         # 未知节点直接跳过，避免流程卡住。
         self._advance_to_next_node()
 
+    def _reset_runtime_state(self) -> None:
+        self.type_timer.stop()
+        self.pause_timer.stop()
+        self.node_wait_timer.stop()
+        self.waiting_for_click = False
+        self.typing = False
+        self.waiting_for_node_animation = False
+        self.waiting_for_node_wait = False
+        self.waiting_for_pause = False
+        self.current_segments = []
+        self.current_total_units = 0
+        self.current_index = 0
+        self.current_pause_points = []
+        self.current_pause_cursor = 0
+        self.current_speed_points = []
+        self.current_speed_cursor = 0
+        self.current_unit_boundaries = []
+        self.current_interval_ms_effective = max(1, int(self.type_interval_ms))
+        self.current_step_by_unit = False
+        self.current_say_auto_next = False
+        self._pending_auto_next_when_unpaused = False
+        self._paused_type_timer_was_active = False
+        self._paused_pause_timer_remaining_ms = None
+        self._paused_node_wait_timer_remaining_ms = None
+
+    def _snapshot_index(self, snapshot: dict[str, Any]) -> int:
+        raw_index = snapshot.get("index", 0)
+        try:
+            parsed_index = int(raw_index)
+        except (TypeError, ValueError):
+            parsed_index = 0
+        return max(0, min(parsed_index, len(self.flow)))
+
+    def _node_type_at(self, index: int) -> str:
+        if index < 0 or index >= len(self.flow):
+            return ""
+        node = self.nodes.get(self.flow[index], {})
+        return str(node.get("type", "")).strip().lower()
+
+    def _rebuild_scene_state(self, target_index: int) -> None:
+        for replay_index in range(max(0, min(target_index, len(self.flow)))):
+            node_id = self.flow[replay_index]
+            node = self.nodes.get(node_id, {})
+            self._replay_node(node)
+
+        self._reset_runtime_state()
+
+    def _replay_node(self, node: dict[str, Any]) -> None:
+        node_type = str(node.get("type", "")).strip().lower()
+        if not node_type:
+            return
+
+        if node_type == "say":
+            self._show_say_node_completed(node)
+            return
+        if node_type == "formula":
+            self._show_formula_node_completed(node)
+            return
+        if node_type in {"wait_click", "click_wait", "gap", "interval", "beat"}:
+            return
+        if node_type in {"wait", "delay", "sleep"}:
+            return
+        if node_type == "call":
+            return
+        if node_type in {"terminal_write", "terminal_log", "terminal_print"}:
+            return
+        if node_type in {"close_gameview", "close_game", "gameview_close", "jump"}:
+            return
+
+        immediate_handler = self._immediate_node_handlers.get(node_type)
+        if immediate_handler is not None:
+            immediate_handler(node)
+            return
+
+        blocking_handler = self._blocking_node_handlers.get(node_type)
+        if blocking_handler is not None:
+            blocking_handler(self._instant_node(node))
+            self.waiting_for_click = False
+            self.waiting_for_node_animation = False
+            self.waiting_for_node_wait = False
+
+    def _instant_node(self, node: dict[str, Any]) -> dict[str, Any]:
+        instant = dict(node)
+        instant["wait"] = False
+        instant["blocking"] = False
+        instant["block"] = False
+        instant["duration_ms"] = 0
+        instant["duration"] = 0
+        instant["time_ms"] = 0
+        instant["time"] = 0
+        instant["ms"] = 0
+        instant["seconds"] = 0
+        instant["second"] = 0
+        instant["sec"] = 0
+        instant["s"] = 0
+        return instant
+
+    def _show_say_node_completed(self, node: dict[str, Any]) -> None:
+        text_value = node.get("text", "")
+        text = text_value if isinstance(text_value, str) else str(text_value)
+        self.current_segments = parse_dialogue_segments(text)
+        self.current_total_units = count_reveal_units(self.current_segments)
+        self.current_index = self.current_total_units
+        self.view.set_name(node.get("speaker", ""))
+        self.view.show_text_segments(self.current_segments)
+
+    def _show_formula_node_completed(self, node: dict[str, Any]) -> None:
+        self.view.set_name("")
+        expr = node.get("latex", "")
+        if not expr:
+            self.view.show_text("(空公式节点)")
+            return
+        self.view.show_formula(expr)
+
+    def _restore_say_wait(self, node: dict[str, Any]) -> None:
+        self._show_say_node_completed(node)
+        self.typing = False
+        self.waiting_for_click = True
+
+    def _restore_formula_wait(self, node: dict[str, Any]) -> None:
+        self._show_formula_node_completed(node)
+        self.typing = False
+        self.waiting_for_click = True
+
     def _finish_script(self) -> None:
         self.view.set_name("")
         self.view.show_text("(没有了喵，再点也不会有反应的喵)")
@@ -276,6 +460,28 @@ class ScriptRunner:
         filename = node.get("file", "")
         if filename:
             self.view.set_background(filename)
+
+    def _run_persistent_set_node(self, node: dict[str, Any]) -> None:
+        key = self._read_str(node, "key", "name")
+        if key is None:
+            return
+        self.persistent_state[key] = node.get("value")
+
+    def _run_persistent_update_node(self, node: dict[str, Any]) -> None:
+        values = node.get("values")
+        if not isinstance(values, dict):
+            return
+        for key, value in values.items():
+            self.persistent_state[str(key)] = value
+
+    def _run_persistent_delete_node(self, node: dict[str, Any]) -> None:
+        key = self._read_str(node, "key", "name")
+        if key is None:
+            return
+        self.persistent_state.pop(key, None)
+
+    def _run_persistent_clear_node(self, _node: dict[str, Any]) -> None:
+        self.persistent_state.clear()
 
     def _run_call_node(self, node: dict[str, Any]) -> None:
         """执行 Python 回调节点。"""
@@ -443,6 +649,12 @@ class ScriptRunner:
         if text is not None and not isinstance(text, str):
             text = str(text)
 
+        above_web: bool | None = None
+        if any(k in node for k in ("above_web", "overlay", "on_top", "topmost")):
+            above_web = self._read_bool(
+                node, "above_web", "overlay", "on_top", "topmost", default=False
+            )
+
         self.view.register_extra_textbox(
             textbox_id=textbox_id,
             rect_x=float(rect_x),
@@ -454,6 +666,7 @@ class ScriptRunner:
             scale=self._read_float(node, "scale"),
             opacity=self._read_float(node, "opacity", "alpha"),
             z=self._read_int(node, "z"),
+            above_web=above_web,
             text=text if isinstance(text, str) else None,
             font_size=self._read_int(node, "font_size", "text_size"),
             color=self._read_str(node, "color", "text_color"),
@@ -488,6 +701,12 @@ class ScriptRunner:
         if text is not None and not isinstance(text, str):
             text = str(text)
 
+        above_web: bool | None = None
+        if any(k in node for k in ("above_web", "overlay", "on_top", "topmost")):
+            above_web = self._read_bool(
+                node, "above_web", "overlay", "on_top", "topmost", default=False
+            )
+
         pending = self.view.show_extra_textbox(
             textbox_id=textbox_id,
             text=text if isinstance(text, str) else None,
@@ -502,6 +721,7 @@ class ScriptRunner:
             opacity=self._read_float(node, "opacity", "alpha"),
             dopacity=self._read_float(node, "dopacity", "dalpha"),
             z=self._read_int(node, "z"),
+            above_web=above_web,
             duration_ms=max(0, int(duration_ms)),
             easing=self._read_str(node, "easing", "ease") or "linear",
             on_finished=self._resume_after_node_animation if wait else None,
@@ -553,6 +773,12 @@ class ScriptRunner:
         if duration_ms is None:
             duration_ms = 0
 
+        above_web: bool | None = None
+        if any(k in node for k in ("above_web", "overlay", "on_top", "topmost")):
+            above_web = self._read_bool(
+                node, "above_web", "overlay", "on_top", "topmost", default=False
+            )
+
         pending = self.view.transform_extra_textbox(
             textbox_id=textbox_id,
             x=self._read_float(node, "x"),
@@ -564,6 +790,7 @@ class ScriptRunner:
             opacity=self._read_float(node, "opacity", "alpha"),
             dopacity=self._read_float(node, "dopacity", "dalpha"),
             z=self._read_int(node, "z"),
+            above_web=above_web,
             duration_ms=max(0, int(duration_ms)),
             easing=self._read_str(node, "easing", "ease") or "linear",
             on_finished=self._resume_after_node_animation if wait else None,
@@ -591,6 +818,12 @@ class ScriptRunner:
         if image_id is None or file is None:
             return
 
+        above_web: bool | None = None
+        if any(k in node for k in ("above_web", "overlay", "on_top", "topmost")):
+            above_web = self._read_bool(
+                node, "above_web", "overlay", "on_top", "topmost", default=False
+            )
+
         self.view.register_image(
             image_id=image_id,
             file=file,
@@ -602,6 +835,7 @@ class ScriptRunner:
             z=self._read_int(node, "z"),
             anchor_x=self._read_float(node, "anchor_x"),
             anchor_y=self._read_float(node, "anchor_y"),
+            above_web=above_web,
             visible=self._read_bool(node, "visible", "show", default=False),
         )
 
@@ -617,6 +851,12 @@ class ScriptRunner:
         if duration_ms is None:
             duration_ms = 0
 
+        above_web: bool | None = None
+        if any(k in node for k in ("above_web", "overlay", "on_top", "topmost")):
+            above_web = self._read_bool(
+                node, "above_web", "overlay", "on_top", "topmost", default=False
+            )
+
         pending = self.view.show_image(
             image_id=image_id,
             file=self._read_str(node, "file", "path", "src"),
@@ -630,6 +870,7 @@ class ScriptRunner:
             opacity=self._read_float(node, "opacity", "alpha"),
             dopacity=self._read_float(node, "dopacity", "dalpha"),
             z=self._read_int(node, "z"),
+            above_web=above_web,
             duration_ms=max(0, int(duration_ms)),
             easing=self._read_str(node, "easing", "ease") or "linear",
             on_finished=self._resume_after_node_animation if wait else None,
@@ -681,6 +922,12 @@ class ScriptRunner:
         if duration_ms is None:
             duration_ms = 0
 
+        above_web: bool | None = None
+        if any(k in node for k in ("above_web", "overlay", "on_top", "topmost")):
+            above_web = self._read_bool(
+                node, "above_web", "overlay", "on_top", "topmost", default=False
+            )
+
         pending = self.view.transform_image(
             image_id=image_id,
             x=self._read_float(node, "x"),
@@ -692,6 +939,7 @@ class ScriptRunner:
             opacity=self._read_float(node, "opacity", "alpha"),
             dopacity=self._read_float(node, "dopacity", "dalpha"),
             z=self._read_int(node, "z"),
+            above_web=above_web,
             duration_ms=max(0, int(duration_ms)),
             easing=self._read_str(node, "easing", "ease") or "linear",
             on_finished=self._resume_after_node_animation if wait else None,
