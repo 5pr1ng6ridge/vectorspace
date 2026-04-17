@@ -187,8 +187,6 @@ class GameView(QWidget):
         self._paused_extra_textbox_timer_was_active = False
         self._paused_dialogue_ui_timer_was_active = False
         self._paused_scene_noise_timer_was_active = False
-        self._paused_text_label_visible = False
-        self._paused_extra_textbox_visibility: dict[str, bool] = {}
         self._scene_noise_overlay = QLabel(self)
         self._scene_noise_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._scene_noise_overlay.setScaledContents(True)
@@ -382,13 +380,10 @@ class GameView(QWidget):
             self._dialogue_ui_timer.stop()
             self._scene_noise_timer.stop()
 
-            # WebEngine 子控件可能盖过 QWidget 遮罩，暂停时临时隐藏这些文本层。
-            self._paused_text_label_visible = self.text_label.isVisible()
-            self.text_label.setVisible(False)
-            self._paused_extra_textbox_visibility = {}
-            for textbox_id, state in self._extra_textboxes.items():
-                self._paused_extra_textbox_visibility[textbox_id] = state.view.isVisible()
-                state.view.setVisible(False)
+            # WebEngine 子控件会盖过普通遮罩，暂停时改为单独变暗文本层。
+            self.text_label.set_pause_dim(True)
+            for state in self._extra_textboxes.values():
+                state.view.set_pause_dim(True)
 
             self._pause_overlay.setVisible(True)
             self._pause_overlay.raise_()
@@ -413,14 +408,9 @@ class GameView(QWidget):
         if self._paused_scene_noise_timer_was_active and self._scene_noise_overlay.isVisible():
             self._scene_noise_timer.start()
 
-        # 恢复暂停前文本可见性。
-        if self._paused_text_label_visible:
-            self.text_label.setVisible(True)
-        for textbox_id, was_visible in self._paused_extra_textbox_visibility.items():
-            state = self._extra_textboxes.get(textbox_id)
-            if state is not None:
-                state.view.setVisible(bool(was_visible))
-        self._paused_extra_textbox_visibility.clear()
+        self.text_label.set_pause_dim(False)
+        for state in self._extra_textboxes.values():
+            state.view.set_pause_dim(False)
 
         self._paused_anim_timer_was_active = False
         self._paused_extra_textbox_timer_was_active = False
@@ -562,6 +552,7 @@ class GameView(QWidget):
             state.view.set_plain_dialogue(text)
         if font_size is not None or color is not None:
             state.view.set_text_style(font_size_px=font_size, color_hex=color)
+        state.view.set_pause_dim(self._paused)
 
         self._apply_extra_textbox_state(state)
         self._refresh_extra_textboxes_stack()
@@ -1637,9 +1628,6 @@ class GameView(QWidget):
         self._set_dialogue_ui_widgets_visible(
             self._dialogue_ui_visible or self._dialogue_ui_anim is not None
         )
-        if self._paused:
-            # 暂停状态下继续保持文本层隐藏，避免压过暂停遮罩。
-            self.text_label.setVisible(False)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

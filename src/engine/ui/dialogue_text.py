@@ -829,6 +829,20 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
       __syncAnimationTimeline(root);
     }};
 
+    window.__setPauseDim = function(enabled, alpha) {{
+      const root = document.getElementById("dialogue-root");
+      if (!root) {{
+        return;
+      }}
+      if (!enabled) {{
+        root.style.filter = "";
+        return;
+      }}
+      const clamped = Math.max(0.0, Math.min(1.0, Number(alpha || 0)));
+      const brightness = Math.max(0.0, 1.0 - clamped);
+      root.style.filter = "brightness(" + brightness.toFixed(3) + ")";
+    }};
+
     document.addEventListener("copy", function(event) {{
       event.preventDefault();
     }});
@@ -866,6 +880,8 @@ class DialogueTextView(QWebEngineView):
         self._pending_html: str | None = None
         self._current_html = ""
         self._anim_session_id = 0
+        self._pause_dim_enabled = False
+        self._pause_dim_alpha = 0.0
         self._base_url = self._resolve_assets_base_url()
 
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -947,6 +963,11 @@ class DialogueTextView(QWebEngineView):
             f"src='data:image/png;base64,{encoded}' />"
         )
 
+    def set_pause_dim(self, enabled: bool, alpha: float = 0.45) -> None:
+        self._pause_dim_enabled = bool(enabled)
+        self._pause_dim_alpha = max(0.0, min(1.0, float(alpha)))
+        self._apply_pause_dim()
+
     def _reload_shell(self) -> None:
         # 重载页面前保留当前内容，避免样式更新时出现闪空。
         self._page_ready = False
@@ -964,6 +985,7 @@ class DialogueTextView(QWebEngineView):
         script = f"window.__applyDialogueHtml({payload});"
         if self._page_ready:
             self.page().runJavaScript(script)
+            self._apply_pause_dim()
             return
         self._pending_html = html_content
 
@@ -974,6 +996,7 @@ class DialogueTextView(QWebEngineView):
         if self._pending_html is None:
             return
         self._set_content_html(self._pending_html)
+        self._apply_pause_dim()
 
     def _wrap_with_anim_session(self, html_content: str) -> str:
         return (
@@ -1000,6 +1023,14 @@ class DialogueTextView(QWebEngineView):
             )
 
         return QUrl.fromLocalFile(str(assets_dir) + "/")
+
+    def _apply_pause_dim(self) -> None:
+        if not self._page_ready:
+            return
+        enabled_js = "true" if self._pause_dim_enabled else "false"
+        alpha_js = f"{self._pause_dim_alpha:.3f}"
+        script = f"window.__setPauseDim({enabled_js}, {alpha_js});"
+        self.page().runJavaScript(script)
 
     def keyPressEvent(self, event) -> None:
         if event.matches(QKeySequence.Copy):
