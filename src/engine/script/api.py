@@ -1,4 +1,4 @@
-"""Python 场景脚本辅助。"""
+"""Helpers for building scene script nodes."""
 
 from __future__ import annotations
 
@@ -11,8 +11,103 @@ SceneLinearItem = SceneNode | SceneCallable
 SceneLinearScript = Iterable[SceneLinearItem]
 
 
+def _node(node_type: str, **fields: Any) -> SceneNode:
+    node: SceneNode = {"type": node_type}
+    node.update(fields)
+    return node
+
+
+def _set_optional(
+    node: SceneNode,
+    key: str,
+    value: Any,
+    *,
+    caster: Callable[[Any], Any] | None = None,
+) -> None:
+    if value is None:
+        return
+    node[key] = caster(value) if caster is not None else value
+
+
+def _set_many(
+    node: SceneNode,
+    values: dict[str, Any],
+    *,
+    caster: Callable[[Any], Any] | None = None,
+) -> None:
+    for key, value in values.items():
+        _set_optional(node, key, value, caster=caster)
+
+
+def _apply_timing_fields(
+    node: SceneNode,
+    *,
+    duration_ms: int | None = None,
+    easing: str | None = None,
+    wait: bool | None = None,
+) -> None:
+    _set_optional(node, "duration_ms", duration_ms, caster=int)
+    _set_optional(node, "easing", easing)
+    if wait is not None:
+        node["wait"] = bool(wait)
+
+
+def _apply_axis_fields(
+    node: SceneNode,
+    *,
+    x: float | None = None,
+    y: float | None = None,
+    dx: float | None = None,
+    dy: float | None = None,
+) -> None:
+    _set_many(
+        node,
+        {
+            "x": x,
+            "y": y,
+            "dx": dx,
+            "dy": dy,
+        },
+        caster=float,
+    )
+
+
+def _apply_visual_fields(
+    node: SceneNode,
+    *,
+    scale: float | None = None,
+    dscale: float | None = None,
+    opacity: float | None = None,
+    dopacity: float | None = None,
+    z: int | None = None,
+) -> None:
+    _set_many(
+        node,
+        {
+            "scale": scale,
+            "dscale": dscale,
+            "opacity": opacity,
+            "dopacity": dopacity,
+        },
+        caster=float,
+    )
+    _set_optional(node, "z", z, caster=int)
+
+
+def _apply_text_style_fields(
+    node: SceneNode,
+    *,
+    text: str | None = None,
+    font_size: int | None = None,
+    color: str | None = None,
+) -> None:
+    _set_optional(node, "text", text)
+    _set_optional(node, "font_size", font_size, caster=int)
+    _set_optional(node, "color", color)
+
+
 def bg(file: str) -> SceneNode:
-    return {"type": "bg", "file": file}
+    return _node("bg", file=file)
 
 
 def say(
@@ -21,14 +116,14 @@ def say(
     *,
     auto_next: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {"type": "say", "speaker": speaker, "text": text}
+    node = _node("say", speaker=speaker, text=text)
     if auto_next:
         node["auto_next"] = True
     return node
 
 
 def formula(latex: str) -> SceneNode:
-    return {"type": "formula", "latex": latex}
+    return _node("formula", latex=latex)
 
 
 def style(
@@ -38,15 +133,11 @@ def style(
     name_font_size: int | None = None,
     name_color: str | None = None,
 ) -> SceneNode:
-    node: SceneNode = {"type": "style"}
-    if font_size is not None:
-        node["font_size"] = int(font_size)
-    if color is not None:
-        node["color"] = color
-    if name_font_size is not None:
-        node["name_font_size"] = int(name_font_size)
-    if name_color is not None:
-        node["name_color"] = name_color
+    node = _node("style")
+    _set_optional(node, "font_size", font_size, caster=int)
+    _set_optional(node, "color", color)
+    _set_optional(node, "name_font_size", name_font_size, caster=int)
+    _set_optional(node, "name_color", name_color)
     return node
 
 
@@ -60,41 +151,32 @@ def typing(
     sfx_folder: str | None = None,
     sfx_min_interval_ms: int | None = None,
 ) -> SceneNode:
-    node: SceneNode = {"type": "typing"}
-    if speed_ms is not None:
-        node["speed_ms"] = int(speed_ms)
-    if cps is not None:
-        node["cps"] = float(cps)
+    node = _node("typing")
+    _set_optional(node, "speed_ms", speed_ms, caster=int)
+    _set_optional(node, "cps", cps, caster=float)
     if sfx is not None:
         node["sfx"] = bool(sfx)
-    if sfx_volume is not None:
-        node["sfx_volume"] = float(sfx_volume)
-    if sfx_file is not None:
-        node["sfx_file"] = sfx_file
-    if sfx_folder is not None:
-        node["sfx_folder"] = sfx_folder
-    if sfx_min_interval_ms is not None:
-        node["sfx_min_interval_ms"] = int(sfx_min_interval_ms)
+    _set_optional(node, "sfx_volume", sfx_volume, caster=float)
+    _set_optional(node, "sfx_file", sfx_file)
+    _set_optional(node, "sfx_folder", sfx_folder)
+    _set_optional(node, "sfx_min_interval_ms", sfx_min_interval_ms, caster=int)
     return node
 
 
 def call(fn: SceneCallable) -> SceneNode:
-    return {"type": "call", "fn": fn}
+    return _node("call", fn=fn)
 
 
 def jump(scene_name: str) -> SceneNode:
-    return {"type": "jump", "scene": scene_name}
+    return _node("jump", scene=scene_name)
+
 
 def terminal_write(text: str, *, end: str = "\n") -> SceneNode:
-    return {
-        "type": "terminal_write",
-        "text": text,
-        "end": end,
-    }
+    return _node("terminal_write", text=text, end=end)
 
 
 def close_gameview(*, confirm: bool = False) -> SceneNode:
-    return {"type": "close_gameview", "confirm": bool(confirm)}
+    return _node("close_gameview", confirm=bool(confirm))
 
 
 def wait(
@@ -111,9 +193,7 @@ def wait(
     elif seconds is not None:
         resolved_ms = int(round(float(seconds) * 1000.0))
 
-    if resolved_ms is None:
-        resolved_ms = 0
-    return {"type": "wait", "duration_ms": max(0, int(resolved_ms))}
+    return _node("wait", duration_ms=max(0, int(resolved_ms or 0)))
 
 
 def delay(*args: Any, **kwargs: Any) -> SceneNode:
@@ -125,7 +205,7 @@ def sleep(*args: Any, **kwargs: Any) -> SceneNode:
 
 
 def wait_click() -> SceneNode:
-    return {"type": "wait_click"}
+    return _node("wait_click")
 
 
 def gap() -> SceneNode:
@@ -142,11 +222,8 @@ def dialogue_ui_show(
     easing: str | None = None,
     wait: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {"type": "dialogue_ui_show", "wait": bool(wait)}
-    if duration_ms is not None:
-        node["duration_ms"] = int(duration_ms)
-    if easing is not None:
-        node["easing"] = easing
+    node = _node("dialogue_ui_show", wait=bool(wait))
+    _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
 
@@ -156,11 +233,8 @@ def dialogue_ui_hide(
     easing: str | None = None,
     wait: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {"type": "dialogue_ui_hide", "wait": bool(wait)}
-    if duration_ms is not None:
-        node["duration_ms"] = int(duration_ms)
-    if easing is not None:
-        node["easing"] = easing
+    node = _node("dialogue_ui_hide", wait=bool(wait))
+    _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
 
@@ -199,31 +273,19 @@ def textbox_register(
     z: int | None = None,
     visible: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {
-        "type": "textbox_register",
-        "id": textbox_id,
-        "rect_x": float(rect_x),
-        "rect_y": float(rect_y),
-        "rect_w": float(rect_w),
-        "rect_h": float(rect_h),
-        "visible": bool(visible),
-    }
-    if text is not None:
-        node["text"] = text
-    if font_size is not None:
-        node["font_size"] = int(font_size)
-    if color is not None:
-        node["color"] = color
-    if x is not None:
-        node["pos_x"] = float(x)
-    if y is not None:
-        node["pos_y"] = float(y)
-    if scale is not None:
-        node["scale"] = float(scale)
-    if opacity is not None:
-        node["opacity"] = float(opacity)
-    if z is not None:
-        node["z"] = int(z)
+    node = _node(
+        "textbox_register",
+        id=textbox_id,
+        rect_x=float(rect_x),
+        rect_y=float(rect_y),
+        rect_w=float(rect_w),
+        rect_h=float(rect_h),
+        visible=bool(visible),
+    )
+    _apply_text_style_fields(node, text=text, font_size=font_size, color=color)
+    _set_optional(node, "pos_x", x, caster=float)
+    _set_optional(node, "pos_y", y, caster=float)
+    _apply_visual_fields(node, scale=scale, opacity=opacity, z=z)
     return node
 
 
@@ -233,7 +295,7 @@ def textbox_set_text(
     *,
     visible: bool | None = None,
 ) -> SceneNode:
-    node: SceneNode = {"type": "textbox_set_text", "id": textbox_id, "text": text}
+    node = _node("textbox_set_text", id=textbox_id, text=text)
     if visible is not None:
         node["visible"] = bool(visible)
     return node
@@ -258,35 +320,18 @@ def textbox_show(
     easing: str | None = None,
     wait: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {"type": "textbox_show", "id": textbox_id, "wait": bool(wait)}
-    if text is not None:
-        node["text"] = text
-    if font_size is not None:
-        node["font_size"] = int(font_size)
-    if color is not None:
-        node["color"] = color
-    if x is not None:
-        node["x"] = float(x)
-    if y is not None:
-        node["y"] = float(y)
-    if dx is not None:
-        node["dx"] = float(dx)
-    if dy is not None:
-        node["dy"] = float(dy)
-    if scale is not None:
-        node["scale"] = float(scale)
-    if dscale is not None:
-        node["dscale"] = float(dscale)
-    if opacity is not None:
-        node["opacity"] = float(opacity)
-    if dopacity is not None:
-        node["dopacity"] = float(dopacity)
-    if z is not None:
-        node["z"] = int(z)
-    if duration_ms is not None:
-        node["duration_ms"] = int(duration_ms)
-    if easing is not None:
-        node["easing"] = easing
+    node = _node("textbox_show", id=textbox_id, wait=bool(wait))
+    _apply_text_style_fields(node, text=text, font_size=font_size, color=color)
+    _apply_axis_fields(node, x=x, y=y, dx=dx, dy=dy)
+    _apply_visual_fields(
+        node,
+        scale=scale,
+        dscale=dscale,
+        opacity=opacity,
+        dopacity=dopacity,
+        z=z,
+    )
+    _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
 
@@ -302,24 +347,15 @@ def textbox_hide(
     wait: bool = False,
     remove: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {
-        "type": "textbox_hide",
-        "id": textbox_id,
-        "wait": bool(wait),
-        "remove": bool(remove),
-    }
-    if dx is not None:
-        node["dx"] = float(dx)
-    if dy is not None:
-        node["dy"] = float(dy)
-    if dscale is not None:
-        node["dscale"] = float(dscale)
-    if opacity is not None:
-        node["opacity"] = float(opacity)
-    if duration_ms is not None:
-        node["duration_ms"] = int(duration_ms)
-    if easing is not None:
-        node["easing"] = easing
+    node = _node(
+        "textbox_hide",
+        id=textbox_id,
+        wait=bool(wait),
+        remove=bool(remove),
+    )
+    _apply_axis_fields(node, dx=dx, dy=dy)
+    _apply_visual_fields(node, dscale=dscale, opacity=opacity)
+    _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
 
@@ -339,38 +375,26 @@ def textbox_transform(
     easing: str | None = None,
     wait: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {"type": "textbox_transform", "id": textbox_id, "wait": bool(wait)}
-    if x is not None:
-        node["x"] = float(x)
-    if y is not None:
-        node["y"] = float(y)
-    if dx is not None:
-        node["dx"] = float(dx)
-    if dy is not None:
-        node["dy"] = float(dy)
-    if scale is not None:
-        node["scale"] = float(scale)
-    if dscale is not None:
-        node["dscale"] = float(dscale)
-    if opacity is not None:
-        node["opacity"] = float(opacity)
-    if dopacity is not None:
-        node["dopacity"] = float(dopacity)
-    if z is not None:
-        node["z"] = int(z)
-    if duration_ms is not None:
-        node["duration_ms"] = int(duration_ms)
-    if easing is not None:
-        node["easing"] = easing
+    node = _node("textbox_transform", id=textbox_id, wait=bool(wait))
+    _apply_axis_fields(node, x=x, y=y, dx=dx, dy=dy)
+    _apply_visual_fields(
+        node,
+        scale=scale,
+        dscale=dscale,
+        opacity=opacity,
+        dopacity=dopacity,
+        z=z,
+    )
+    _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
 
 def textbox_remove(textbox_id: str) -> SceneNode:
-    return {"type": "textbox_remove", "id": textbox_id}
+    return _node("textbox_remove", id=textbox_id)
 
 
 def textbox_clear() -> SceneNode:
-    return {"type": "textbox_clear"}
+    return _node("textbox_clear")
 
 
 def extra_textbox_register(*args: Any, **kwargs: Any) -> SceneNode:
@@ -415,28 +439,17 @@ def image_register(
     anchor_y: float | None = None,
     visible: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {
-        "type": "image_register",
-        "id": image_id,
-        "file": file,
-        "visible": bool(visible),
-    }
-    if folder is not None:
-        node["folder"] = folder
-    if x is not None:
-        node["x"] = float(x)
-    if y is not None:
-        node["y"] = float(y)
-    if scale is not None:
-        node["scale"] = float(scale)
-    if opacity is not None:
-        node["opacity"] = float(opacity)
-    if z is not None:
-        node["z"] = int(z)
-    if anchor_x is not None:
-        node["anchor_x"] = float(anchor_x)
-    if anchor_y is not None:
-        node["anchor_y"] = float(anchor_y)
+    node = _node(
+        "image_register",
+        id=image_id,
+        file=file,
+        visible=bool(visible),
+    )
+    _set_optional(node, "folder", folder)
+    _apply_axis_fields(node, x=x, y=y)
+    _apply_visual_fields(node, scale=scale, opacity=opacity, z=z)
+    _set_optional(node, "anchor_x", anchor_x, caster=float)
+    _set_optional(node, "anchor_y", anchor_y, caster=float)
     return node
 
 
@@ -458,37 +471,19 @@ def image_show(
     easing: str | None = None,
     wait: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {
-        "type": "image_show",
-        "id": image_id,
-        "wait": bool(wait),
-    }
-    if file is not None:
-        node["file"] = file
-    if folder is not None:
-        node["folder"] = folder
-    if x is not None:
-        node["x"] = float(x)
-    if y is not None:
-        node["y"] = float(y)
-    if dx is not None:
-        node["dx"] = float(dx)
-    if dy is not None:
-        node["dy"] = float(dy)
-    if scale is not None:
-        node["scale"] = float(scale)
-    if dscale is not None:
-        node["dscale"] = float(dscale)
-    if opacity is not None:
-        node["opacity"] = float(opacity)
-    if dopacity is not None:
-        node["dopacity"] = float(dopacity)
-    if z is not None:
-        node["z"] = int(z)
-    if duration_ms is not None:
-        node["duration_ms"] = int(duration_ms)
-    if easing is not None:
-        node["easing"] = easing
+    node = _node("image_show", id=image_id, wait=bool(wait))
+    _set_optional(node, "file", file)
+    _set_optional(node, "folder", folder)
+    _apply_axis_fields(node, x=x, y=y, dx=dx, dy=dy)
+    _apply_visual_fields(
+        node,
+        scale=scale,
+        dscale=dscale,
+        opacity=opacity,
+        dopacity=dopacity,
+        z=z,
+    )
+    _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
 
@@ -504,24 +499,15 @@ def image_hide(
     wait: bool = False,
     remove: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {
-        "type": "image_hide",
-        "id": image_id,
-        "wait": bool(wait),
-        "remove": bool(remove),
-    }
-    if dx is not None:
-        node["dx"] = float(dx)
-    if dy is not None:
-        node["dy"] = float(dy)
-    if dscale is not None:
-        node["dscale"] = float(dscale)
-    if opacity is not None:
-        node["opacity"] = float(opacity)
-    if duration_ms is not None:
-        node["duration_ms"] = int(duration_ms)
-    if easing is not None:
-        node["easing"] = easing
+    node = _node(
+        "image_hide",
+        id=image_id,
+        wait=bool(wait),
+        remove=bool(remove),
+    )
+    _apply_axis_fields(node, dx=dx, dy=dy)
+    _apply_visual_fields(node, dscale=dscale, opacity=opacity)
+    _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
 
@@ -541,42 +527,26 @@ def image_transform(
     easing: str | None = None,
     wait: bool = False,
 ) -> SceneNode:
-    node: SceneNode = {
-        "type": "image_transform",
-        "id": image_id,
-        "wait": bool(wait),
-    }
-    if x is not None:
-        node["x"] = float(x)
-    if y is not None:
-        node["y"] = float(y)
-    if dx is not None:
-        node["dx"] = float(dx)
-    if dy is not None:
-        node["dy"] = float(dy)
-    if scale is not None:
-        node["scale"] = float(scale)
-    if dscale is not None:
-        node["dscale"] = float(dscale)
-    if opacity is not None:
-        node["opacity"] = float(opacity)
-    if dopacity is not None:
-        node["dopacity"] = float(dopacity)
-    if z is not None:
-        node["z"] = int(z)
-    if duration_ms is not None:
-        node["duration_ms"] = int(duration_ms)
-    if easing is not None:
-        node["easing"] = easing
+    node = _node("image_transform", id=image_id, wait=bool(wait))
+    _apply_axis_fields(node, x=x, y=y, dx=dx, dy=dy)
+    _apply_visual_fields(
+        node,
+        scale=scale,
+        dscale=dscale,
+        opacity=opacity,
+        dopacity=dopacity,
+        z=z,
+    )
+    _apply_timing_fields(node, duration_ms=duration_ms, easing=easing)
     return node
 
 
 def image_remove(image_id: str) -> SceneNode:
-    return {"type": "image_remove", "id": image_id}
+    return _node("image_remove", id=image_id)
 
 
 def image_clear() -> SceneNode:
-    return {"type": "image_clear"}
+    return _node("image_clear")
 
 
 def scene(
@@ -585,5 +555,5 @@ def scene(
     *,
     defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """构造标准场景字典。"""
+    """Construct a standard scene dict."""
     return {"id": scene_id, "defaults": dict(defaults or {}), "script": script}

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from src.engine.script.api import SceneLinearItem, bg, image_hide, image_register, image_show, image_transform, jump, say, style, typing
+from src.engine.script.api import SceneLinearItem, bg, dialogue_ui_hide, dialogue_ui_show, image_hide, image_register, image_show, image_transform, jump, say, style, typing
 
 SCENE_ID = "loop1"
 DEFAULTS = {
@@ -22,11 +22,14 @@ DEFAULTS = {
 
 def build_scene() -> Iterator[SceneLinearItem]:
     """按顺序产出场景节点。"""
+    yield dialogue_ui_hide(duration_ms=0, easing="in_circ", wait=True)
     yield bg("bg_vstest.png")
+    yield dialogue_ui_show(duration_ms=400, easing="out_circ", wait=False)
     yield typing(speed_ms=3)
     yield style(font_size=27, color="#FF0000", name_font_size=40, name_color="#FF0000")
-    yield say(
-        "",
-        "现在的小孩真是一点都不满足，以前我们老资历连核被膜都没有，DNA复制只有一个起始位点，但那时候很方便，mRNA都是多顺反子，也不用剪切、加帽加尾，只有核糖体、鞭毛就很满足了，丙酮酸倒在细胞质基质上吃，有的类囊体都直接裸露在细胞质基质中，不过当时还是很方便的，能边转录边翻译，一个mRNA能结合多个核糖体，现在的这些小孩居然不想要限制性内切酶，去要什么表观遗传、分化，真是搞不懂",
-    )
-    yield jump("Ch1/loop1")
+    for i in range(0,100):
+        yield say(
+            f"{i}",
+            "现在的小孩真是一点都不满足，以前我们老资历连核被膜都没有，DNA复制只有一个起始位点，但那时候很方便，mRNA都是多顺反子，也不用剪切、加帽加尾，只有核糖体、鞭毛就很满足了，丙酮酸倒在细胞质基质上吃，有的类囊体都直接裸露在细胞质基质中，不过当时还是很方便的，能边转录边翻译，一个mRNA能结合多个核糖体，现在的这些小孩居然不想要限制性内切酶，去要什么表观遗传、分化，真是搞不懂",
+        )
+    #yield jump("Ch1/loop1")

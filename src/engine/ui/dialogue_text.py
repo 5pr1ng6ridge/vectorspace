@@ -289,8 +289,8 @@ def _parse_speed_interval_ms(attrs_text: str) -> int | None:
     return max(1, min(60_000, interval_ms))
 
 
-def _extract_pause_segment(text: str, start_index: int) -> tuple[int | None, int]:
-    """从 text[start_index] 处提取 <pause ...> 指令。"""
+def _extract_inline_tag_candidate(text: str, start_index: int) -> tuple[str | None, int]:
+    """提取单行标签候选串，例如 ``<pause ...>``。"""
     closing_index = text.find(">", start_index + 1)
     if closing_index == -1:
         return None, start_index
@@ -300,6 +300,15 @@ def _extract_pause_segment(text: str, start_index: int) -> tuple[int | None, int
 
     candidate = text[start_index : closing_index + 1]
     if "\n" in candidate or "\r" in candidate:
+        return None, start_index
+
+    return candidate, closing_index + 1
+
+
+def _extract_pause_segment(text: str, start_index: int) -> tuple[int | None, int]:
+    """从 text[start_index] 处提取 <pause ...> 指令。"""
+    candidate, next_index = _extract_inline_tag_candidate(text, start_index)
+    if candidate is None:
         return None, start_index
 
     match = _PAUSE_TAG_RE.fullmatch(candidate)
@@ -311,20 +320,13 @@ def _extract_pause_segment(text: str, start_index: int) -> tuple[int | None, int
     if duration_ms is None:
         return None, start_index
 
-    return duration_ms, closing_index + 1
+    return duration_ms, next_index
 
 
 def _extract_speed_segment(text: str, start_index: int) -> tuple[int | None, int]:
     """从 text[start_index] 处提取 <speed ...> 指令。"""
-    closing_index = text.find(">", start_index + 1)
-    if closing_index == -1:
-        return None, start_index
-
-    if closing_index - start_index > 256:
-        return None, start_index
-
-    candidate = text[start_index : closing_index + 1]
-    if "\n" in candidate or "\r" in candidate:
+    candidate, next_index = _extract_inline_tag_candidate(text, start_index)
+    if candidate is None:
         return None, start_index
 
     match = _SPEED_TAG_RE.fullmatch(candidate)
@@ -336,7 +338,7 @@ def _extract_speed_segment(text: str, start_index: int) -> tuple[int | None, int
     if interval_ms is None:
         return None, start_index
 
-    return interval_ms, closing_index + 1
+    return interval_ms, next_index
 
 
 def _sanitize_html_tag(candidate: str) -> str | None:
@@ -400,29 +402,22 @@ def _extract_supported_html_tag(
     - (sanitized_tag, next_index): 成功
     - (None, start_index): 失败
     """
-    closing_index = text.find(">", start_index + 1)
-    if closing_index == -1:
-        return None, start_index
-
-    if closing_index - start_index > 256:
-        return None, start_index
-
-    candidate = text[start_index : closing_index + 1]
-    if "\n" in candidate or "\r" in candidate:
+    candidate, next_index = _extract_inline_tag_candidate(text, start_index)
+    if candidate is None:
         return None, start_index
 
     if allow_unsafe_html_tags:
         # 开发阶段全放行时，仍优先保留内建标签规范化/简写映射（如 <rainbow> -> <span class="fx-rainbow">）。
         sanitized = _sanitize_html_tag(candidate)
         if sanitized is not None:
-            return sanitized, closing_index + 1
-        return candidate, closing_index + 1
+            return sanitized, next_index
+        return candidate, next_index
 
     sanitized = _sanitize_html_tag(candidate)
     if sanitized is None:
         return None, start_index
 
-    return sanitized, closing_index + 1
+    return sanitized, next_index
 
 
 def parse_dialogue_segments(

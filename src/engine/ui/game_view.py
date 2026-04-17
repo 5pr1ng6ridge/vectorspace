@@ -25,6 +25,7 @@ _IMAGE_SEARCH_FOLDERS = (
     "VECTORSPACE_pic",
     "ui",
 )
+_AUDIO_SEARCH_FOLDERS = ("sfx", "audio", "sounds", "se")
 
 _EASING_MAP: dict[str, QEasingCurve.Type] = {
     "linear": QEasingCurve.Type.Linear,
@@ -147,7 +148,7 @@ class GameView(QWidget):
     TYPEWRITER_SFX_DEFAULT_VOLUME = 0.35
     TYPEWRITER_SFX_DEFAULT_MIN_INTERVAL_MS = 40
     SCENE_NOISE_FRAME_MS = 67
-    NOISE_CLEAR_SETTLE_MS = 100
+    NOISE_CLEAR_SETTLE_MS = 67
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -936,90 +937,90 @@ class GameView(QWidget):
         return pixmap, str(resolved)
 
     def _resolve_asset_file(self, file: str, folder: str | None = None) -> Path | None:
-        cache_key = (file.strip(), folder.strip() if isinstance(folder, str) else None)
-        cached = self._asset_resolve_cache.get(cache_key, _CACHE_MISS)
-        if cached is not _CACHE_MISS:
-            return Path(cached) if cached is not None else None
-
-        candidate = Path(file)
-        if candidate.is_absolute() and candidate.exists():
-            self._asset_resolve_cache[cache_key] = str(candidate)
-            return candidate
-
-        paths_to_try: list[Path] = []
-
-        if folder:
-            folder_path = Path(folder)
-            paths_to_try.append(asset_path(*(folder_path / candidate).parts))
-
-        if len(candidate.parts) > 1:
-            paths_to_try.append(asset_path(*candidate.parts))
-        else:
-            for image_folder in _IMAGE_SEARCH_FOLDERS:
-                paths_to_try.append(asset_path(image_folder, file))
-            paths_to_try.append(asset_path(file))
-
-        checked: set[str] = set()
-        for path in paths_to_try:
-            key = str(path)
-            if key in checked:
-                continue
-            checked.add(key)
-            if path.exists():
-                self._asset_resolve_cache[cache_key] = str(path)
-                return path
-
-        assets_root = asset_path()
-        if assets_root.exists() and candidate.name:
-            for matched in assets_root.rglob(candidate.name):
-                if matched.is_file():
-                    self._asset_resolve_cache[cache_key] = str(matched)
-                    return matched
-
-        self._asset_resolve_cache[cache_key] = None
-        return None
+        return self._resolve_cached_file(
+            file=file,
+            folder=folder,
+            cache=self._asset_resolve_cache,
+            default_folders=_IMAGE_SEARCH_FOLDERS,
+        )
 
     def _resolve_audio_file(self, file: str, folder: str | None = None) -> Path | None:
-        cache_key = (file.strip(), folder.strip() if isinstance(folder, str) else None)
-        cached = self._audio_resolve_cache.get(cache_key, _CACHE_MISS)
+        return self._resolve_cached_file(
+            file=file,
+            folder=folder,
+            cache=self._audio_resolve_cache,
+            default_folders=_AUDIO_SEARCH_FOLDERS,
+        )
+
+    def _resolve_cached_file(
+        self,
+        *,
+        file: str,
+        folder: str | None,
+        cache: dict[tuple[str, str | None], str | None],
+        default_folders: tuple[str, ...],
+    ) -> Path | None:
+        normalized_file = file.strip()
+        normalized_folder = folder.strip() if isinstance(folder, str) else None
+        cache_key = (normalized_file, normalized_folder)
+        cached = cache.get(cache_key, _CACHE_MISS)
         if cached is not _CACHE_MISS:
             return Path(cached) if cached is not None else None
 
-        candidate = Path(file)
+        candidate = Path(normalized_file)
         if candidate.is_absolute() and candidate.exists():
-            self._audio_resolve_cache[cache_key] = str(candidate)
+            cache[cache_key] = str(candidate)
             return candidate
 
-        paths_to_try: list[Path] = []
-        if folder:
-            folder_path = Path(folder)
-            paths_to_try.append(asset_path(*(folder_path / candidate).parts))
-
-        if len(candidate.parts) > 1:
-            paths_to_try.append(asset_path(*candidate.parts))
-        else:
-            for audio_folder in ("sfx", "audio", "sounds", "se"):
-                paths_to_try.append(asset_path(audio_folder, file))
-            paths_to_try.append(asset_path(file))
-
-        checked: set[str] = set()
-        for path in paths_to_try:
-            key = str(path)
-            if key in checked:
-                continue
-            checked.add(key)
+        for path in self._iter_candidate_asset_paths(
+            candidate,
+            folder=normalized_folder,
+            default_folders=default_folders,
+        ):
             if path.exists():
-                self._audio_resolve_cache[cache_key] = str(path)
+                cache[cache_key] = str(path)
                 return path
 
-        assets_root = asset_path()
-        if assets_root.exists() and candidate.name:
-            for matched in assets_root.rglob(candidate.name):
-                if matched.is_file():
-                    self._audio_resolve_cache[cache_key] = str(matched)
-                    return matched
+        matched = self._find_asset_by_name(candidate.name)
+        cache[cache_key] = str(matched) if matched is not None else None
+        return matched
 
-        self._audio_resolve_cache[cache_key] = None
+    def _iter_candidate_asset_paths(
+        self,
+        candidate: Path,
+        *,
+        folder: str | None,
+        default_folders: tuple[str, ...],
+    ):
+        seen: set[str] = set()
+
+        def _yield_if_new(path: Path):
+            path_key = str(path)
+            if path_key in seen:
+                return
+            seen.add(path_key)
+            yield path
+
+        if folder:
+            folder_path = Path(folder)
+            yield from _yield_if_new(asset_path(*(folder_path / candidate).parts))
+
+        if len(candidate.parts) > 1:
+            yield from _yield_if_new(asset_path(*candidate.parts))
+            return
+
+        for base_folder in default_folders:
+            yield from _yield_if_new(asset_path(base_folder, candidate.name))
+        yield from _yield_if_new(asset_path(candidate.name))
+
+    def _find_asset_by_name(self, name: str) -> Path | None:
+        assets_root = asset_path()
+        if not assets_root.exists() or not name:
+            return None
+
+        for matched in assets_root.rglob(name):
+            if matched.is_file():
+                return matched
         return None
 
     def _load_cached_pixmap(self, path: Path) -> QPixmap | None:
