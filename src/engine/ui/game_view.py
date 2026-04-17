@@ -147,6 +147,7 @@ class GameView(QWidget):
     TYPEWRITER_SFX_DEFAULT_VOLUME = 0.35
     TYPEWRITER_SFX_DEFAULT_MIN_INTERVAL_MS = 40
     SCENE_NOISE_FRAME_MS = 67
+    NOISE_CLEAR_SETTLE_MS = 100
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -343,7 +344,9 @@ class GameView(QWidget):
     def clear_dialogue_content(self) -> None:
         """清空姓名与对话内容，避免切场景时残留上一句。"""
         self.set_name("")
-        self.show_text("")
+        self.text_label.set_plain_dialogue("")
+        # 先隐藏文本层，避免 WebEngine 异步提交空内容前出现旧文本残影。
+        self.text_label.setVisible(False)
 
     def play_scene_noise_once(
         self,
@@ -1531,14 +1534,21 @@ class GameView(QWidget):
     def _finish_scene_noise_playback(self) -> None:
         self._scene_noise_timer.stop()
         self._scene_noise_overlay.hide()
-        self._set_dialogue_ui_widgets_visible(
-            self._dialogue_ui_visible or self._dialogue_ui_anim is not None
-        )
+        # 在 noise 结束后再清一次，防止旧文本在过渡收尾时闪回。
+        self.clear_dialogue_content()
 
         callback = self._scene_noise_on_finished
         self._scene_noise_on_finished = None
         if callback is not None:
             callback()
+
+        # 稍后再恢复对话层，让 WebView 有机会完成空内容刷新。
+        QTimer.singleShot(self.NOISE_CLEAR_SETTLE_MS, self._restore_dialogue_ui_after_noise)
+
+    def _restore_dialogue_ui_after_noise(self) -> None:
+        self._set_dialogue_ui_widgets_visible(
+            self._dialogue_ui_visible or self._dialogue_ui_anim is not None
+        )
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

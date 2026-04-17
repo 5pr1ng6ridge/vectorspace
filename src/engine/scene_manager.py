@@ -38,7 +38,6 @@ class SceneManager:
 
         # 切场景前先清空上一场景残留文本，并播放 noise_* 过渡一轮。
         self.view.clear_dialogue_content()
-        self.view.play_scene_noise_once()
 
         runner = ScriptRunner(
             self.view,
