@@ -76,7 +76,6 @@ class GameWindow(QMainWindow):
         target_scene = scene_name.strip() or (self._loaded_scene_name or "prologue")
         if self._scene_manager is not None and target_scene != self._loaded_scene_name:
             self._scene_manager.load_scene(target_scene, on_loaded=_after_scene_loaded)
-            self._loaded_scene_name = target_scene
             return
         _after_scene_loaded()
 
@@ -110,7 +109,7 @@ class GameWindow(QMainWindow):
         shortcut_up.setContext(Qt.WindowShortcut)
         shortcut_up.activated.connect(self._bring_terminal_above_game)
 
-        shortcut_down = QShortcut(QKeySequence(Qt.Key_Escape), game_window)
+        shortcut_down = QShortcut(QKeySequence(Qt.Key_Down), game_window)
         shortcut_down.setContext(Qt.WindowShortcut)
         shortcut_down.activated.connect(self._collapse_terminal_below_game)
 
@@ -123,7 +122,11 @@ class GameWindow(QMainWindow):
             history_logger=self.terminal_view.append_history,
             terminal_logger=self._write_terminal_from_scene,
             close_game_callback=self._close_game_from_scene,
+            scene_changed_callback=self._on_scene_changed,
         )
+
+    def _on_scene_changed(self, scene_name: str) -> None:
+        self._loaded_scene_name = str(scene_name).strip() or None
 
     def _set_terminal_windowed_after_start(self) -> None:
         if self.isFullScreen() or self.isMinimized():
@@ -234,7 +237,7 @@ class GameWindow(QMainWindow):
                 if event.key() == Qt.Key_Up:
                     self._bring_terminal_above_game()
                     return True
-                if event.key() == Qt.Key_Escape:
+                if event.key() == Qt.Key_Down:
                     self._collapse_terminal_below_game()
                     return True
         return super().eventFilter(watched, event)

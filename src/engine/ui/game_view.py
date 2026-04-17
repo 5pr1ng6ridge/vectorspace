@@ -139,6 +139,7 @@ class GameView(QWidget):
     """承载游戏画面的主 Widget。"""
 
     advanceRequested = Signal()
+    pauseStateChanged = Signal(bool)
 
     DESIGN_WIDTH = 1920
     DESIGN_HEIGHT = 1080
@@ -176,6 +177,18 @@ class GameView(QWidget):
         self.text_label = DialogueTextView(self)
         self.text_label.setAttribute(Qt.WA_TranslucentBackground)
         self.text_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._pause_overlay = QLabel(self)
+        self._pause_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._pause_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 160);")
+        self._pause_overlay.hide()
+        self._paused = False
+        self._pause_started_at = 0.0
+        self._paused_anim_timer_was_active = False
+        self._paused_extra_textbox_timer_was_active = False
+        self._paused_dialogue_ui_timer_was_active = False
+        self._paused_scene_noise_timer_was_active = False
+        self._paused_text_label_visible = False
+        self._paused_extra_textbox_visibility: dict[str, bool] = {}
         self._scene_noise_overlay = QLabel(self)
         self._scene_noise_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._scene_noise_overlay.setScaledContents(True)
@@ -224,6 +237,7 @@ class GameView(QWidget):
         self.name_label.raise_()
         self.text_label.raise_()
         self._scene_noise_overlay.raise_()
+        self._pause_overlay.raise_()
 
     def _apply_fonts(self) -> None:
         """加载像素字体并应用到姓名框和对话框。"""
@@ -348,6 +362,79 @@ class GameView(QWidget):
         self.text_label.set_plain_dialogue("")
         # 先隐藏文本层，避免 WebEngine 异步提交空内容前出现旧文本残影。
         self.text_label.setVisible(False)
+
+    def set_paused(self, paused: bool) -> None:
+        target = bool(paused)
+        if target == self._paused:
+            return
+
+        self._paused = target
+        if self._paused:
+            self._pause_started_at = time.monotonic()
+
+            self._paused_anim_timer_was_active = self._anim_timer.isActive()
+            self._paused_extra_textbox_timer_was_active = self._extra_textbox_timer.isActive()
+            self._paused_dialogue_ui_timer_was_active = self._dialogue_ui_timer.isActive()
+            self._paused_scene_noise_timer_was_active = self._scene_noise_timer.isActive()
+
+            self._anim_timer.stop()
+            self._extra_textbox_timer.stop()
+            self._dialogue_ui_timer.stop()
+            self._scene_noise_timer.stop()
+
+            # WebEngine 子控件可能盖过 QWidget 遮罩，暂停时临时隐藏这些文本层。
+            self._paused_text_label_visible = self.text_label.isVisible()
+            self.text_label.setVisible(False)
+            self._paused_extra_textbox_visibility = {}
+            for textbox_id, state in self._extra_textboxes.items():
+                self._paused_extra_textbox_visibility[textbox_id] = state.view.isVisible()
+                state.view.setVisible(False)
+
+            self._pause_overlay.setVisible(True)
+            self._pause_overlay.raise_()
+            self.pauseStateChanged.emit(True)
+            return
+
+        paused_seconds = max(0.0, time.monotonic() - self._pause_started_at)
+        if paused_seconds > 0.0:
+            for anim in self._sprite_anims.values():
+                anim.started_at += paused_seconds
+            for anim in self._extra_textbox_anims.values():
+                anim.started_at += paused_seconds
+            if self._dialogue_ui_anim is not None:
+                self._dialogue_ui_anim.started_at += paused_seconds
+
+        if self._paused_anim_timer_was_active and self._sprite_anims:
+            self._anim_timer.start()
+        if self._paused_extra_textbox_timer_was_active and self._extra_textbox_anims:
+            self._extra_textbox_timer.start()
+        if self._paused_dialogue_ui_timer_was_active and self._dialogue_ui_anim is not None:
+            self._dialogue_ui_timer.start()
+        if self._paused_scene_noise_timer_was_active and self._scene_noise_overlay.isVisible():
+            self._scene_noise_timer.start()
+
+        # 恢复暂停前文本可见性。
+        if self._paused_text_label_visible:
+            self.text_label.setVisible(True)
+        for textbox_id, was_visible in self._paused_extra_textbox_visibility.items():
+            state = self._extra_textboxes.get(textbox_id)
+            if state is not None:
+                state.view.setVisible(bool(was_visible))
+        self._paused_extra_textbox_visibility.clear()
+
+        self._paused_anim_timer_was_active = False
+        self._paused_extra_textbox_timer_was_active = False
+        self._paused_dialogue_ui_timer_was_active = False
+        self._paused_scene_noise_timer_was_active = False
+        self._pause_overlay.setVisible(False)
+        self._setup_z_order()
+        self.pauseStateChanged.emit(False)
+
+    def toggle_paused(self) -> None:
+        self.set_paused(not self._paused)
+
+    def is_paused(self) -> bool:
+        return self._paused
 
     def play_scene_noise_once(
         self,
@@ -1550,12 +1637,16 @@ class GameView(QWidget):
         self._set_dialogue_ui_widgets_visible(
             self._dialogue_ui_visible or self._dialogue_ui_anim is not None
         )
+        if self._paused:
+            # 暂停状态下继续保持文本层隐藏，避免压过暂停遮罩。
+            self.text_label.setVisible(False)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
 
         self._update_bg_geometry()
         self.sprite_root.setGeometry(self.rect())
+        self._pause_overlay.setGeometry(self.rect())
         self._scene_noise_overlay.setGeometry(self.rect())
         if self._scene_noise_overlay.isVisible():
             self._apply_scene_noise_frame(self._scene_noise_index)
@@ -1570,11 +1661,23 @@ class GameView(QWidget):
         self._setup_z_order()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if self._paused:
+            event.accept()
+            return
         if event.button() == Qt.LeftButton:
             self.advanceRequested.emit()
         super().mousePressEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key_Escape:
+            self.toggle_paused()
+            event.accept()
+            return
+
+        if self._paused:
+            event.accept()
+            return
+
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             self.advanceRequested.emit()
         super().keyPressEvent(event)

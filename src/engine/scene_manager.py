@@ -17,12 +17,14 @@ class SceneManager:
         history_logger: Callable[[str], None] | None = None,
         terminal_logger: Callable[[str], None] | None = None,
         close_game_callback: Callable[[bool], None] | None = None,
+        scene_changed_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.view = view
         self.current_runner: ScriptRunner | None = None
         self._history_logger = history_logger
         self._terminal_logger = terminal_logger
         self._close_game_callback = close_game_callback
+        self._scene_changed_callback = scene_changed_callback
 
     def load_scene(
         self,
@@ -31,6 +33,13 @@ class SceneManager:
     ) -> None:
         """按场景名加载并启动 Python 场景脚本。"""
         script_data = load_scene_script(scene_name)
+        resolved_scene_name = str(script_data.get("id", scene_name)).strip() or scene_name
+
+        if self._scene_changed_callback is not None:
+            try:
+                self._scene_changed_callback(resolved_scene_name)
+            except Exception as exc:
+                print(f"[SceneManager] scene_changed callback failed: {exc}")
 
         previous_runner = self.current_runner
         if previous_runner is not None:

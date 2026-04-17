@@ -60,6 +60,11 @@ class ScriptRunner:
         self.current_say_auto_next = False
         self.waiting_for_pause = False
         self.type_interval_ms = 30
+        self._paused = self.view.is_paused()
+        self._paused_type_timer_was_active = False
+        self._paused_pause_timer_remaining_ms: int | None = None
+        self._paused_node_wait_timer_remaining_ms: int | None = None
+        self._pending_auto_next_when_unpaused = False
 
         self.type_timer = QTimer(view)
         self.type_timer.timeout.connect(self._on_typewriter_tick)
@@ -117,6 +122,7 @@ class ScriptRunner:
         }
 
         self.view.advanceRequested.connect(self._on_advance_requested)
+        self.view.pauseStateChanged.connect(self._on_pause_state_changed)
         self._apply_defaults()
 
     def start(self) -> None:
@@ -140,6 +146,10 @@ class ScriptRunner:
         self.node_wait_timer.stop()
         try:
             self.view.advanceRequested.disconnect(self._on_advance_requested)
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            self.view.pauseStateChanged.disconnect(self._on_pause_state_changed)
         except (TypeError, RuntimeError):
             pass
 
@@ -352,7 +362,7 @@ class ScriptRunner:
             return False
 
         self.waiting_for_node_wait = True
-        self.node_wait_timer.start(duration_ms)
+        self._start_node_wait_timer(duration_ms)
         return True
 
     def _run_wait_click_node(self) -> None:
@@ -779,7 +789,7 @@ class ScriptRunner:
             self._finish_current_typewriter()
             return
 
-        self.type_timer.start(self.current_interval_ms_effective)
+        self._start_type_timer()
 
     def _on_typewriter_tick(self) -> None:
         if self._disposed:
@@ -820,7 +830,7 @@ class ScriptRunner:
             self._finish_current_typewriter()
             return
 
-        self.type_timer.start(self.current_interval_ms_effective)
+        self._start_type_timer()
 
     def _try_pause_at_current_index(self) -> bool:
         if self.current_pause_cursor >= len(self.current_pause_points):
@@ -833,7 +843,7 @@ class ScriptRunner:
         self.current_pause_cursor += 1
         self.waiting_for_pause = True
         self.type_timer.stop()
-        self.pause_timer.start(max(0, int(pause_ms)))
+        self._start_pause_timer(max(0, int(pause_ms)))
         return True
 
     def _jump_to_next_pause_or_finish(self) -> None:
@@ -859,7 +869,7 @@ class ScriptRunner:
         if self._try_pause_at_current_index():
             return
 
-        self.type_timer.start(self.current_interval_ms_effective)
+        self._start_type_timer()
 
     def _finish_current_typewriter(self) -> None:
         self.type_timer.stop()
@@ -870,6 +880,9 @@ class ScriptRunner:
         self.view.show_text_segments(self.current_segments)
 
         if self.current_say_auto_next:
+            if self._paused:
+                self._pending_auto_next_when_unpaused = True
+                return
             self.waiting_for_click = False
             self.index += 1
             QTimer.singleShot(0, self._show_current_node)
@@ -988,6 +1001,8 @@ class ScriptRunner:
     def _on_advance_requested(self) -> None:
         if self._disposed:
             return
+        if self._paused:
+            return
         if self.typing:
             self._jump_to_next_pause_or_finish()
             return
@@ -1002,6 +1017,81 @@ class ScriptRunner:
             self.waiting_for_click = False
             self.index += 1
             self._show_current_node()
+
+    def _on_pause_state_changed(self, paused: bool) -> None:
+        if self._disposed:
+            return
+
+        target = bool(paused)
+        if target == self._paused:
+            return
+        self._paused = target
+
+        if self._paused:
+            self._paused_type_timer_was_active = self.type_timer.isActive()
+            if self._paused_type_timer_was_active:
+                self.type_timer.stop()
+
+            self._paused_pause_timer_remaining_ms = None
+            if self.pause_timer.isActive():
+                remaining = self.pause_timer.remainingTime()
+                self._paused_pause_timer_remaining_ms = max(
+                    1, remaining if remaining >= 0 else 1
+                )
+                self.pause_timer.stop()
+
+            self._paused_node_wait_timer_remaining_ms = None
+            if self.node_wait_timer.isActive():
+                remaining = self.node_wait_timer.remainingTime()
+                self._paused_node_wait_timer_remaining_ms = max(
+                    1, remaining if remaining >= 0 else 1
+                )
+                self.node_wait_timer.stop()
+            return
+
+        if self._pending_auto_next_when_unpaused:
+            self._pending_auto_next_when_unpaused = False
+            self.waiting_for_click = False
+            self.index += 1
+            QTimer.singleShot(0, self._show_current_node)
+            self._paused_type_timer_was_active = False
+            self._paused_pause_timer_remaining_ms = None
+            self._paused_node_wait_timer_remaining_ms = None
+            return
+
+        if self.waiting_for_pause and self._paused_pause_timer_remaining_ms is not None:
+            self.pause_timer.start(max(1, int(self._paused_pause_timer_remaining_ms)))
+        elif self._paused_type_timer_was_active and self.typing and not self.waiting_for_pause:
+            self.type_timer.start(self.current_interval_ms_effective)
+
+        if self.waiting_for_node_wait and self._paused_node_wait_timer_remaining_ms is not None:
+            self.node_wait_timer.start(
+                max(1, int(self._paused_node_wait_timer_remaining_ms))
+            )
+
+        self._paused_type_timer_was_active = False
+        self._paused_pause_timer_remaining_ms = None
+        self._paused_node_wait_timer_remaining_ms = None
+
+    def _start_type_timer(self) -> None:
+        if self._paused:
+            self._paused_type_timer_was_active = True
+            return
+        self.type_timer.start(self.current_interval_ms_effective)
+
+    def _start_pause_timer(self, duration_ms: int) -> None:
+        clamped = max(0, int(duration_ms))
+        if self._paused:
+            self._paused_pause_timer_remaining_ms = max(1, clamped)
+            return
+        self.pause_timer.start(clamped)
+
+    def _start_node_wait_timer(self, duration_ms: int) -> None:
+        clamped = max(0, int(duration_ms))
+        if self._paused:
+            self._paused_node_wait_timer_remaining_ms = max(1, clamped)
+            return
+        self.node_wait_timer.start(clamped)
 
     def _apply_defaults(self) -> None:
         defaults = self.script_data.get("defaults", {})
