@@ -14,6 +14,9 @@ from ..ui.dialogue_text import (
 )
 from ..ui.game_view import GameView
 
+NodeHandler = Callable[[dict[str, Any]], None]
+BlockingNodeHandler = Callable[[dict[str, Any]], bool]
+
 
 class ScriptRunner:
     """按 ``flow`` 顺序驱动场景节点。"""
@@ -68,6 +71,50 @@ class ScriptRunner:
         self.node_wait_timer = QTimer(view)
         self.node_wait_timer.setSingleShot(True)
         self.node_wait_timer.timeout.connect(self._on_node_wait_timeout)
+
+        self._immediate_node_handlers: dict[str, NodeHandler] = {
+            "bg": self._run_background_node,
+            "style": self._apply_style_node,
+            "typing": self._apply_typing_node,
+            "textbox_register": self._run_textbox_register_node,
+            "extra_textbox_register": self._run_textbox_register_node,
+            "textbox_set_text": self._run_textbox_set_text_node,
+            "textbox_text": self._run_textbox_set_text_node,
+            "extra_textbox_set_text": self._run_textbox_set_text_node,
+            "textbox_remove": self._run_textbox_remove_node,
+            "extra_textbox_remove": self._run_textbox_remove_node,
+            "textbox_clear": self._run_textbox_clear_node,
+            "extra_textbox_clear": self._run_textbox_clear_node,
+            "call": self._run_call_node,
+            "terminal_write": self._run_terminal_write_node,
+            "terminal_log": self._run_terminal_write_node,
+            "terminal_print": self._run_terminal_write_node,
+            "close_gameview": self._run_close_game_node,
+            "close_game": self._run_close_game_node,
+            "gameview_close": self._run_close_game_node,
+            "image_register": self._run_image_register_node,
+            "image_remove": self._run_image_remove_node,
+            "image_clear": self._run_image_clear_node,
+        }
+        self._blocking_node_handlers: dict[str, BlockingNodeHandler] = {
+            "wait": self._run_wait_node,
+            "delay": self._run_wait_node,
+            "sleep": self._run_wait_node,
+            "dialogue_ui_show": self._run_dialogue_ui_show_node,
+            "ui_show": self._run_dialogue_ui_show_node,
+            "dialogue_ui_hide": self._run_dialogue_ui_hide_node,
+            "ui_hide": self._run_dialogue_ui_hide_node,
+            "textbox_show": self._run_textbox_show_node,
+            "extra_textbox_show": self._run_textbox_show_node,
+            "textbox_hide": self._run_textbox_hide_node,
+            "extra_textbox_hide": self._run_textbox_hide_node,
+            "textbox_transform": self._run_textbox_transform_node,
+            "extra_textbox_transform": self._run_textbox_transform_node,
+            "image_show": self._run_image_show_node,
+            "image_hide": self._run_image_hide_node,
+            "image_transform": self._run_image_transform_node,
+            "jump": self._run_jump_node,
+        }
 
         self.view.advanceRequested.connect(self._on_advance_requested)
         self._apply_defaults()
@@ -125,21 +172,12 @@ class ScriptRunner:
             return
 
         if self.index >= len(self.flow):
-            self.view.set_name("")
-            self.view.show_text("(没有了喵，再点也不会有反应的喵)")
-            self.waiting_for_click = False
-            self.typing = False
-            self.waiting_for_node_animation = False
-            self.waiting_for_node_wait = False
-            self.waiting_for_pause = False
-            self.type_timer.stop()
-            self.pause_timer.stop()
-            self.node_wait_timer.stop()
+            self._finish_script()
             return
 
         node_id = self.flow[self.index]
         node = self.nodes.get(node_id, {})
-        node_type = node.get("type")
+        node_type = str(node.get("type", "")).strip().lower()
         if self._on_node is not None:
             try:
                 self._on_node(node_id, node, self.index)
@@ -174,164 +212,60 @@ class ScriptRunner:
             self.waiting_for_click = True
             return
 
-        if node_type == "bg":
-            filename = node.get("file", "")
-            if filename:
-                self.view.set_background(filename)
-
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "style":
-            self._apply_style_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "typing":
-            self._apply_typing_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"wait", "delay", "sleep"}:
-            if self._run_wait_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
-            return
-
         if node_type in {"wait_click", "click_wait", "gap", "interval", "beat"}:
             self._run_wait_click_node()
             return
 
-        if node_type in {"dialogue_ui_show", "ui_show"}:
-            if self._run_dialogue_ui_show_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
+        immediate_handler = self._immediate_node_handlers.get(node_type)
+        if immediate_handler is not None:
+            self._run_immediate_node(immediate_handler, node)
             return
 
-        if node_type in {"dialogue_ui_hide", "ui_hide"}:
-            if self._run_dialogue_ui_hide_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"textbox_register", "extra_textbox_register"}:
-            self._run_textbox_register_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"textbox_set_text", "textbox_text", "extra_textbox_set_text"}:
-            self._run_textbox_set_text_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"textbox_show", "extra_textbox_show"}:
-            if self._run_textbox_show_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"textbox_hide", "extra_textbox_hide"}:
-            if self._run_textbox_hide_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"textbox_transform", "extra_textbox_transform"}:
-            if self._run_textbox_transform_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"textbox_remove", "extra_textbox_remove"}:
-            self._run_textbox_remove_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"textbox_clear", "extra_textbox_clear"}:
-            self.view.clear_extra_textboxes()
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "call":
-            self._run_call_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"terminal_write", "terminal_log", "terminal_print"}:
-            self._run_terminal_write_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type in {"close_gameview", "close_game", "gameview_close"}:
-            self._run_close_game_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "image_register":
-            self._run_image_register_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "image_show":
-            if self._run_image_show_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "image_hide":
-            if self._run_image_hide_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "image_transform":
-            if self._run_image_transform_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "image_remove":
-            self._run_image_remove_node(node)
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "image_clear":
-            self.view.clear_images()
-            self.index += 1
-            self._show_current_node()
-            return
-
-        if node_type == "jump":
-            if self._run_jump_node(node):
-                return
-            self.index += 1
-            self._show_current_node()
+        blocking_handler = self._blocking_node_handlers.get(node_type)
+        if blocking_handler is not None:
+            self._run_blocking_node(blocking_handler, node)
             return
 
         # 未知节点直接跳过，避免流程卡住。
+        self._advance_to_next_node()
+
+    def _finish_script(self) -> None:
+        self.view.set_name("")
+        self.view.show_text("(没有了喵，再点也不会有反应的喵)")
+        self.waiting_for_click = False
+        self.typing = False
+        self.waiting_for_node_animation = False
+        self.waiting_for_node_wait = False
+        self.waiting_for_pause = False
+        self.type_timer.stop()
+        self.pause_timer.stop()
+        self.node_wait_timer.stop()
+
+    def _advance_to_next_node(self) -> None:
         self.index += 1
         self._show_current_node()
+
+    def _run_immediate_node(
+        self,
+        handler: NodeHandler,
+        node: dict[str, Any],
+    ) -> None:
+        handler(node)
+        self._advance_to_next_node()
+
+    def _run_blocking_node(
+        self,
+        handler: BlockingNodeHandler,
+        node: dict[str, Any],
+    ) -> None:
+        if handler(node):
+            return
+        self._advance_to_next_node()
+
+    def _run_background_node(self, node: dict[str, Any]) -> None:
+        filename = node.get("file", "")
+        if filename:
+            self.view.set_background(filename)
 
     def _run_call_node(self, node: dict[str, Any]) -> None:
         """执行 Python 回调节点。"""
@@ -636,6 +570,9 @@ class ScriptRunner:
             return
         self.view.remove_extra_textbox(textbox_id)
 
+    def _run_textbox_clear_node(self, _node: dict[str, Any]) -> None:
+        self.view.clear_extra_textboxes()
+
     # ======================图像节点====================== 
 
     def _run_image_register_node(self, node: dict[str, Any]) -> None:
@@ -760,6 +697,9 @@ class ScriptRunner:
         if image_id is None:
             return
         self.view.remove_image(image_id)
+
+    def _run_image_clear_node(self, _node: dict[str, Any]) -> None:
+        self.view.clear_images()
 
     # ======================scene切换====================== 
     

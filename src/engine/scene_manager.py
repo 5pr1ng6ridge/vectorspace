@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable
 
 from .script.loader import load_scene_script
 from .script.runner import ScriptRunner
+from .ui.dialogue_text import dialogue_to_plain_text
 from .ui.game_view import GameView
 
 
@@ -75,7 +75,9 @@ class SceneManager:
 
         speaker = str(node.get("speaker", "")).strip()
         raw_text = node.get("text", "")
-        text = self._strip_tags(raw_text if isinstance(raw_text, str) else str(raw_text))
+        text = dialogue_to_plain_text(
+            raw_text if isinstance(raw_text, str) else str(raw_text)
+        ).strip()
         if speaker:
             self._log_history(f"[{speaker}]: {text}")
             return
@@ -89,9 +91,3 @@ class SceneManager:
             self._history_logger(payload)
         except Exception as exc:
             print(f"[SceneManager] history log failed: {exc}")
-
-    @staticmethod
-    def _strip_tags(text: str) -> str:
-        text = re.sub(r"<\s*br\s*/?\s*>", "\n", text, flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", "", text)
-        return text.strip()

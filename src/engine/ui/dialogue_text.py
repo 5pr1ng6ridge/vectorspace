@@ -47,6 +47,7 @@ _FX_TAG_CLASS_MAP = {
 _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 _PAUSE_TAG_RE = re.compile(r"<\s*pause\b([^<>]*?)\s*/?\s*>", re.IGNORECASE)
 _SPEED_TAG_RE = re.compile(r"<\s*speed\b([^<>]*?)\s*/?\s*>", re.IGNORECASE)
+_HTML_BREAK_TAG_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
 
 
 def _is_truthy_env(name: str) -> bool:
@@ -554,6 +555,37 @@ def count_reveal_units(segments: list[DialogueSegment]) -> int:
         else:
             total += len(segment.content)
     return total
+
+
+def _html_fragment_to_plain_text(fragment: str) -> str:
+    text = _HTML_BREAK_TAG_RE.sub("\n", fragment)
+    return re.sub(r"<[^>]+>", "", text)
+
+
+def segments_to_plain_text(segments: list[DialogueSegment]) -> str:
+    parts: list[str] = []
+
+    for segment in segments:
+        if segment.kind in {"pause", "speed"}:
+            continue
+        if segment.kind == "html":
+            parts.append(_html_fragment_to_plain_text(segment.content))
+            continue
+        parts.append(segment.content)
+
+    return "".join(parts)
+
+
+def dialogue_to_plain_text(
+    text: str,
+    allow_unsafe_html_tags: bool | None = None,
+) -> str:
+    return segments_to_plain_text(
+        parse_dialogue_segments(
+            text,
+            allow_unsafe_html_tags=allow_unsafe_html_tags,
+        )
+    )
 
 
 def _hidden_text_html(text: str) -> str:
