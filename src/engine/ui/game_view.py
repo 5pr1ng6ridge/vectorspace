@@ -116,6 +116,9 @@ class _ExtraTextBoxState:
     z: int = 0
     above_web: bool = False
     visible: bool = False
+    font_size_design: int | None = None
+    text_color: str | None = None
+    line_height: float | None = None
 
 
 @dataclass
@@ -225,6 +228,12 @@ class GameView(QWidget):
         self._scene_noise_frames: list[QPixmap] = self._load_scene_noise_frames()
         self._scene_noise_index = 0
         self._scene_noise_on_finished: Callable[[], None] | None = None
+        self._dialogue_font_family = ""
+        self._name_font_size_design = 40
+        self._dialogue_font_size_design = 35
+        self._dialogue_line_height = 1.35
+        self._dialogue_color = "#FFFFFF"
+        self._name_color = "#FFFFFF"
 
         self._apply_fonts()
         self._setup_z_order()
@@ -246,11 +255,10 @@ class GameView(QWidget):
         if not family:
             print("[GameView] failed to load dialogue font")
             return
-        self.name_label.setFont(QFont(family, 40))
-        self.text_label.setFont(QFont(family, 35))
-        self.name_label.setStyleSheet("color: #FFFFFF; background: transparent;")
+        self._dialogue_font_family = family
+        self._apply_scaled_dialogue_style()
         for state in self._extra_textboxes.values():
-            state.view.setFont(QFont(family, 35))
+            self._apply_scaled_extra_textbox_style(state)
 
     def set_dialogue_style(
         self,
@@ -260,21 +268,61 @@ class GameView(QWidget):
         name_font_size: int | None = None,
         name_color: str | None = None,
     ) -> None:
+        if font_size is not None:
+            self._dialogue_font_size_design = max(1, int(font_size))
+        if color is not None:
+            self._dialogue_color = str(color)
+        if line_height is not None:
+            self._dialogue_line_height = float(line_height)
         if name_font_size is not None:
-            current_name_font = QFont(self.name_label.font())
-            current_name_font.setPointSize(max(1, int(name_font_size)))
-            self.name_label.setFont(current_name_font)
-
+            self._name_font_size_design = max(1, int(name_font_size))
         if name_color is not None:
-            self.name_label.setStyleSheet(
-                f"color: {name_color}; background: transparent;"
-            )
+            self._name_color = str(name_color)
 
-        self.text_label.set_text_style(
-            font_size_px=font_size,
-            color_hex=color,
-            line_height=line_height,
+        self._apply_scaled_dialogue_style()
+
+    def _apply_scaled_dialogue_style(self) -> None:
+        family = self._dialogue_font_family or self.name_label.font().family() or "sans-serif"
+        self.name_label.setFont(
+            QFont(family, self._scaled_font_size(self._name_font_size_design))
         )
+        self.name_label.setStyleSheet(
+            f"color: {self._name_color}; background: transparent;"
+        )
+        scaled_dialogue_font_size = self._scaled_font_size(self._dialogue_font_size_design)
+        self.text_label.setFont(QFont(family, scaled_dialogue_font_size))
+        self.text_label.set_text_style(
+            font_size_px=scaled_dialogue_font_size,
+            color_hex=self._dialogue_color,
+            line_height=self._dialogue_line_height,
+        )
+
+    def _apply_scaled_extra_textbox_style(self, state: _ExtraTextBoxState) -> None:
+        family = self._dialogue_font_family or self.text_label.font().family() or "sans-serif"
+        design_font_size = (
+            state.font_size_design
+            if state.font_size_design is not None
+            else self._dialogue_font_size_design
+        )
+        scaled_font_size = self._scaled_font_size(design_font_size)
+        state.view.setFont(QFont(family, scaled_font_size))
+        state.view.set_text_style(
+            font_size_px=scaled_font_size,
+            color_hex=state.text_color,
+            line_height=state.line_height,
+        )
+
+    def _design_scale_factor(self) -> float:
+        if self.width() <= 0 or self.height() <= 0:
+            return 1.0
+        return min(
+            self.width() / float(self.DESIGN_WIDTH),
+            self.height() / float(self.DESIGN_HEIGHT),
+        )
+
+    def _scaled_font_size(self, design_font_size: int | float) -> int:
+        scaled = float(design_font_size) * self._design_scale_factor()
+        return max(1, int(round(scaled)))
 
     def _setup_typewriter_sfx(self) -> None:
         self._typewriter_sfx.setLoopCount(1)
@@ -533,6 +581,13 @@ class GameView(QWidget):
                 y=float(rect_y),
                 above_web=initial_above_web,
                 visible=bool(visible),
+                font_size_design=(
+                    max(1, int(font_size))
+                    if font_size is not None
+                    else self._dialogue_font_size_design
+                ),
+                text_color=str(color) if color is not None else None,
+                line_height=float(line_height) if line_height is not None else None,
             )
             self._extra_textboxes[key] = state
         else:
@@ -558,11 +613,13 @@ class GameView(QWidget):
         if text is not None:
             state.view.set_plain_dialogue(text)
         if font_size is not None or color is not None or line_height is not None:
-            state.view.set_text_style(
-                font_size_px=font_size,
-                color_hex=color,
-                line_height=line_height,
-            )
+            if font_size is not None:
+                state.font_size_design = max(1, int(font_size))
+            if color is not None:
+                state.text_color = str(color)
+            if line_height is not None:
+                state.line_height = float(line_height)
+            self._apply_scaled_extra_textbox_style(state)
 
         self._apply_extra_textbox_state(state)
         self._refresh_extra_textboxes_stack()
@@ -613,11 +670,13 @@ class GameView(QWidget):
         if text is not None:
             state.view.set_plain_dialogue(text)
         if font_size is not None or color is not None or line_height is not None:
-            state.view.set_text_style(
-                font_size_px=font_size,
-                color_hex=color,
-                line_height=line_height,
-            )
+            if font_size is not None:
+                state.font_size_design = max(1, int(font_size))
+            if color is not None:
+                state.text_color = str(color)
+            if line_height is not None:
+                state.line_height = float(line_height)
+            self._apply_scaled_extra_textbox_style(state)
         if z is not None:
             state.z = int(z)
             self._refresh_extra_textboxes_stack()
@@ -1701,6 +1760,9 @@ class GameView(QWidget):
         self._scene_noise_overlay.setGeometry(self.rect())
         if self._scene_noise_overlay.isVisible():
             self._apply_scene_noise_frame(self._scene_noise_index)
+        self._apply_scaled_dialogue_style()
+        for state in self._extra_textboxes.values():
+            self._apply_scaled_extra_textbox_style(state)
         self._update_dialogue_ui_geometry()
 
         for state in self._sprites.values():
