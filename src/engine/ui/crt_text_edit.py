@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QRect, QTimer, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -9,6 +9,7 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPainterPath,
     QPen,
+    QPixmap,
     QRadialGradient,
 )
 from PySide6.QtWidgets import QPlainTextEdit
@@ -29,14 +30,26 @@ class CrtTextEdit(QPlainTextEdit):
     BORDER_GLOW_ALPHA = 72
     GLASS_GLARE_ALPHA = 36
     CORNER_RADIUS_PX = 18
+    ENABLE_CRT_TINT = True
+    ENABLE_APERTURE_GRILLE = True
+    ENABLE_SCANLINES = True
+    ENABLE_VIGNETTE = True
+    ENABLE_SCAN_SWEEP = False
+    ENABLE_NOISE = False
+    ENABLE_GLASS_GLARE = False
+    ENABLE_BEZEL = False
+    ENABLE_SCANLINE_DRIFT = False
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._crt_phase = 0
+        self._crt_static_overlay = QPixmap()
+        self._crt_static_overlay_key: tuple[int, int, float] | None = None
         self._crt_anim_timer = QTimer(self)
         self._crt_anim_timer.setInterval(self.CRT_ANIMATION_INTERVAL_MS)
         self._crt_anim_timer.timeout.connect(self._advance_crt_animation)
-        self._crt_anim_timer.start()
+        if self._has_dynamic_crt_layers():
+            self._crt_anim_timer.start()
 
     def apply_crt_style(self, font_size: int) -> None:
         self.setFont(self._load_terminal_font(font_size))
@@ -52,6 +65,8 @@ class CrtTextEdit(QPlainTextEdit):
             }
             """
         )
+        self._invalidate_crt_cache()
+        self._refresh_crt_animation_state()
 
     @staticmethod
     def _load_terminal_font(size: int) -> QFont:
@@ -79,40 +94,130 @@ class CrtTextEdit(QPlainTextEdit):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        if not self._crt_anim_timer.isActive():
-            self._crt_anim_timer.start()
+        self._refresh_crt_animation_state()
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
         self._crt_anim_timer.stop()
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._invalidate_crt_cache()
+
     def _advance_crt_animation(self) -> None:
+        if not self._has_dynamic_crt_layers():
+            self._crt_anim_timer.stop()
+            return
+
+        old_dirty_rect = self._dynamic_crt_dirty_rect_for_phase(self._crt_phase)
         self._crt_phase = (self._crt_phase + 1) % 4096
         if self.viewport().isVisible():
-            self.viewport().update()
+            if self.ENABLE_NOISE or self.ENABLE_SCANLINE_DRIFT:
+                self.viewport().update()
+                return
+
+            new_dirty_rect = self._dynamic_crt_dirty_rect_for_phase(self._crt_phase)
+            dirty_rect = old_dirty_rect.united(new_dirty_rect)
+            if dirty_rect.isValid() and not dirty_rect.isEmpty():
+                self.viewport().update(dirty_rect.adjusted(-2, -2, 2, 2))
+            else:
+                self.viewport().update()
+
+    def _invalidate_crt_cache(self) -> None:
+        self._crt_static_overlay = QPixmap()
+        self._crt_static_overlay_key = None
+
+    def _refresh_crt_animation_state(self) -> None:
+        if self._has_dynamic_crt_layers() and self.isVisible():
+            if not self._crt_anim_timer.isActive():
+                self._crt_anim_timer.start()
+            return
+        self._crt_anim_timer.stop()
+
+    def _has_dynamic_crt_layers(self) -> bool:
+        return any(
+            (
+                self.ENABLE_SCAN_SWEEP,
+                self.ENABLE_NOISE,
+                self.ENABLE_SCANLINE_DRIFT,
+            )
+        )
+
+    def _ensure_crt_static_overlay(self) -> None:
+        size = self.viewport().size()
+        if size.isEmpty():
+            return
+
+        dpr = self.viewport().devicePixelRatioF()
+        cache_key = (size.width(), size.height(), dpr)
+        if self._crt_static_overlay_key == cache_key and not self._crt_static_overlay.isNull():
+            return
+
+        self._crt_static_overlay = self._build_crt_static_overlay()
+        self._crt_static_overlay_key = cache_key
+
+    def _build_crt_static_overlay(self) -> QPixmap:
+        size = self.viewport().size()
+        dpr = self.viewport().devicePixelRatioF()
+        pixmap = QPixmap(
+            max(1, int(round(size.width() * dpr))),
+            max(1, int(round(size.height() * dpr))),
+        )
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(Qt.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        rect = QRect(0, 0, size.width(), size.height())
+        self._paint_crt_static_layers(painter, rect)
+        painter.end()
+        return pixmap
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
 
+        self._ensure_crt_static_overlay()
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.Antialiasing, False)
-        self._paint_crt_overlay(painter)
+        if not self._crt_static_overlay.isNull():
+            painter.drawPixmap(0, 0, self._crt_static_overlay)
+        if self._has_dynamic_crt_layers():
+            self._paint_crt_dynamic_layers(painter)
 
-    def _paint_crt_overlay(self, painter: QPainter) -> None:
+    def _paint_crt_static_layers(self, painter: QPainter, rect: QRect) -> None:
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        if self.ENABLE_CRT_TINT:
+            painter.fillRect(rect, QColor(90, 255, 150, self.CRT_TINT_ALPHA))
+        if self.ENABLE_GLASS_GLARE:
+            self._paint_glass_glare(painter, rect)
+        if self.ENABLE_APERTURE_GRILLE:
+            self._paint_aperture_grille(painter, rect)
+        if self.ENABLE_SCANLINES:
+            self._paint_scanlines(painter, rect, phase_offset=0)
+        if self.ENABLE_VIGNETTE:
+            self._paint_vignette(painter, rect)
+        if self.ENABLE_BEZEL:
+            self._paint_bezel(painter, rect)
+        painter.restore()
+
+    def _paint_crt_dynamic_layers(self, painter: QPainter) -> None:
         rect = self.viewport().rect()
         if rect.isEmpty():
             return
 
         painter.save()
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-        painter.fillRect(rect, QColor(90, 255, 150, self.CRT_TINT_ALPHA))
-        #self._paint_scan_sweep(painter, rect)
-        #self._paint_glass_glare(painter, rect)
-        self._paint_aperture_grille(painter, rect)
-        self._paint_scanlines(painter, rect)
-        #self._paint_noise(painter, rect)
-        self._paint_vignette(painter, rect)
-        #self._paint_bezel(painter, rect)
+        if self.ENABLE_SCAN_SWEEP:
+            self._paint_scan_sweep(painter, rect)
+        if self.ENABLE_SCANLINES and self.ENABLE_SCANLINE_DRIFT:
+            self._paint_scanlines(
+                painter,
+                rect,
+                phase_offset=self._crt_phase % self.SCANLINE_SPACING_PX,
+            )
+        if self.ENABLE_NOISE:
+            self._paint_noise(painter, rect)
         painter.restore()
 
     def _paint_scan_sweep(self, painter: QPainter, rect) -> None:
@@ -165,10 +270,9 @@ class CrtTextEdit(QPlainTextEdit):
                     QColor(40, 160, 80, max(6, self.APERTURE_GRILLE_ALPHA - 8)),
                 )
 
-    def _paint_scanlines(self, painter: QPainter, rect) -> None:
+    def _paint_scanlines(self, painter: QPainter, rect, *, phase_offset: int) -> None:
         strong_line = QColor(0, 0, 0, self.SCANLINE_ALPHA)
         soft_line = QColor(0, 0, 0, self.SCANLINE_SOFT_ALPHA)
-        phase_offset = self._crt_phase % self.SCANLINE_SPACING_PX
         for y in range(rect.top() + phase_offset, rect.bottom(), self.SCANLINE_SPACING_PX):
             painter.fillRect(rect.left(), y, rect.width(), 1, strong_line)
             if y + 1 < rect.bottom():
@@ -221,3 +325,23 @@ class CrtTextEdit(QPlainTextEdit):
         painter.setPen(QPen(QColor(0, 0, 0, 86), 2.0))
         painter.drawPath(inner_path)
         painter.restore()
+
+    def _dynamic_crt_dirty_rect_for_phase(self, phase: int) -> QRect:
+        rect = self.viewport().rect()
+        if rect.isEmpty():
+            return QRect()
+
+        if self.ENABLE_NOISE or self.ENABLE_SCANLINE_DRIFT:
+            return rect
+
+        if self.ENABLE_SCAN_SWEEP:
+            sweep_margin = 140
+            sweep_half_height = 90
+            sweep_cycle = max(1, rect.height() + sweep_margin * 2)
+            sweep_center = rect.top() + ((phase * 19) % sweep_cycle) - sweep_margin
+            top = max(rect.top(), sweep_center - sweep_half_height)
+            bottom = min(rect.bottom(), sweep_center + sweep_half_height)
+            if bottom >= top:
+                return QRect(rect.left(), top, rect.width(), bottom - top + 1)
+
+        return QRect()

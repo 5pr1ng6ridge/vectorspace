@@ -4,7 +4,7 @@ from typing import Callable, Dict, List, Optional, Union, Deque
 from collections import deque
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import QRect, Qt, Signal, QTimer
 from PySide6.QtGui import (
     QInputMethodEvent,
     QKeyEvent,
@@ -450,27 +450,29 @@ class TerminalView(CrtTextEdit):
         return max(self._input_start_pos, min(int(position), max_position))
 
     def _set_terminal_cursor_position(self, position: int) -> None:
+        previous_position = self._terminal_cursor_pos
         clamped_position = self._clamp_terminal_cursor_pos(position)
         self._terminal_cursor_pos = clamped_position
         cursor = self.textCursor()
         cursor.setPosition(clamped_position)
         self.setTextCursor(cursor)
         self._reset_cursor_blink()
-        self.viewport().update()
+        self._update_cursor_overlay(previous_position)
 
     def _restore_editor_cursor(self) -> None:
         self._set_terminal_cursor_position(self._terminal_cursor_pos)
 
     def _sync_terminal_cursor_from_editor(self) -> None:
+        previous_position = self._terminal_cursor_pos
         self._terminal_cursor_pos = self._clamp_terminal_cursor_pos(
             self.textCursor().position()
         )
         self._reset_cursor_blink()
-        self.viewport().update()
+        self._update_cursor_overlay(previous_position)
 
     def _toggle_cursor_blink(self) -> None:
         self._cursor_blink_visible = not self._cursor_blink_visible
-        self.viewport().update()
+        self._update_cursor_overlay()
 
     def _reset_cursor_blink(self) -> None:
         self._cursor_blink_visible = True
@@ -480,12 +482,45 @@ class TerminalView(CrtTextEdit):
     def focusInEvent(self, event) -> None:
         super().focusInEvent(event)
         self._reset_cursor_blink()
-        self.viewport().update()
+        self._update_cursor_overlay()
 
     def focusOutEvent(self, event) -> None:
         super().focusOutEvent(event)
         self._cursor_blink_visible = False
-        self.viewport().update()
+        self._update_cursor_overlay()
+
+    def _cursor_block_rect(self, position: int | None = None) -> QRect:
+        cursor_position = self._clamp_terminal_cursor_pos(
+            self._terminal_cursor_pos if position is None else position
+        )
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(cursor_position)
+        cursor_rect = self.cursorRect(cursor)
+
+        plain_text = self.toPlainText()
+        current_char = ""
+        if cursor_position < len(plain_text):
+            current_char = plain_text[cursor_position]
+        cell_sample = current_char if current_char not in ("\n", "\r", "") else "M"
+        cell_width = max(1, self.fontMetrics().horizontalAdvance(cell_sample))
+        cursor_height = max(
+            self.CURSOR_MIN_HEIGHT_PX,
+            int(round(cursor_rect.height() * self.CURSOR_HEIGHT_RATIO)),
+        )
+
+        block_rect = QRect(cursor_rect)
+        block_rect.setWidth(cell_width)
+        block_rect.setTop(block_rect.bottom() - cursor_height + 1)
+        return block_rect
+
+    def _cursor_overlay_rect(self, position: int | None = None) -> QRect:
+        return self._cursor_block_rect(position).adjusted(-2, -2, 2, 2)
+
+    def _update_cursor_overlay(self, previous_position: int | None = None) -> None:
+        dirty_rect = self._cursor_overlay_rect()
+        if previous_position is not None:
+            dirty_rect = dirty_rect.united(self._cursor_overlay_rect(previous_position))
+        self.viewport().update(dirty_rect)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
@@ -499,37 +534,22 @@ class TerminalView(CrtTextEdit):
             return
 
         cursor_position = self._clamp_terminal_cursor_pos(self._terminal_cursor_pos)
-        cursor = QTextCursor(self.document())
-        cursor.setPosition(cursor_position)
-        cursor_rect = self.cursorRect(cursor)
-        plain_text = self.toPlainText()
-        current_char = ""
-        if cursor_position < len(plain_text):
-            current_char = plain_text[cursor_position]
-        cell_sample = current_char if current_char not in ("\n", "\r", "") else "M"
-        cell_width = max(1, self.fontMetrics().horizontalAdvance(cell_sample))
-        cursor_height = max(
-            self.CURSOR_MIN_HEIGHT_PX,
-            int(round(cursor_rect.height() * self.CURSOR_HEIGHT_RATIO)),
-        )
-        block_rect = cursor_rect
-        block_rect.setWidth(cell_width)
-        block_rect.setTop(block_rect.bottom() - cursor_height + 1)
+        block_rect = self._cursor_block_rect(cursor_position)
 
         painter = QPainter(self.viewport())
         painter.fillRect(block_rect, self.palette().text().color())
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         super().mousePressEvent(event)
-        self.viewport().update()
+        self._update_cursor_overlay()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         super().mouseMoveEvent(event)
-        self.viewport().update()
+        self._update_cursor_overlay()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         super().mouseReleaseEvent(event)
-        self.viewport().update()
+        self._update_cursor_overlay()
 
     # ---------------- 命令分发器 ----------------
 
