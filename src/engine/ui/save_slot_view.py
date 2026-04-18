@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QKeyEvent, QTextCursor, QTextOption
+from PySide6.QtGui import QKeyEvent, QTextCursor, QTextOption
 from PySide6.QtWidgets import QPlainTextEdit
 
-from ..resources.fonts import load_font_family
+from .crt_text_edit import CrtTextEdit
 
 
-class SaveSlotView(QPlainTextEdit):
+class SaveSlotView(CrtTextEdit):
     closeRequested = Signal()
     saveRequested = Signal(int)
     loadRequested = Signal(int)
@@ -117,38 +117,4 @@ class SaveSlotView(QPlainTextEdit):
         self.ensureCursorVisible()
 
     def _apply_style(self) -> None:
-        self.setFont(self._load_font(22))
-        self.setStyleSheet(
-            """
-            QPlainTextEdit {
-                background-color: #101010;
-                color: #d8ffd8;
-                border: 1px solid #2f2f2f;
-                selection-background-color: #2d5a2d;
-            }
-            """
-        )
-
-    @staticmethod
-    def _load_font(size: int) -> QFont:
-        primary_family = load_font_family("fonts", "FSEX302.ttf")
-        fallback_family = load_font_family(
-            "fonts",
-            "fusion-pixel-12px-monospaced-zh_hans.ttf",
-        )
-
-        families: list[str] = []
-        if primary_family:
-            families.append(primary_family)
-        if fallback_family and fallback_family not in families:
-            families.append(fallback_family)
-
-        if families:
-            font = QFont()
-            font.setPointSize(size)
-            font.setFamilies(families)
-            return font
-
-        if fallback_family:
-            return QFont(fallback_family, size)
-        return QFont("monospace", size)
+        self.apply_crt_style(22)

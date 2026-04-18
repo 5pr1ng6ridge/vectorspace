@@ -51,7 +51,8 @@ class GameWindow(QMainWindow):
         self._overlay_mode: str | None = None
         self._resume_game_after_overlay = False
         self._game_resolution = self.DEFAULT_GAME_RESOLUTION
-        self._resolution_label = self._resolution_to_label(self._game_resolution)
+        self._resolution_label = self.FULLSCREEN_RESOLUTION_LABEL
+        self._pending_resolution_label = self._resolution_label
         self._test_option_label = self.TEST_OPTIONS[0]
 
         self._game_window: QMainWindow | None = None
@@ -209,7 +210,7 @@ class GameWindow(QMainWindow):
         if screen is None:
             return
 
-        geometry = screen.availableGeometry()
+        geometry = screen.geometry()
         width, height = self._game_resolution
         x = geometry.x() + max(0, (geometry.width() - width) // 2)
         y = geometry.y() + max(0, (geometry.height() - height) // 2)
@@ -272,12 +273,14 @@ class GameWindow(QMainWindow):
             self._close_save_ui()
 
     def _open_settings_ui(self) -> None:
+        self._pending_resolution_label = self._resolution_label
         self._refresh_settings_items()
         self._open_overlay_ui("settings", self.settings_view)
 
     def _close_settings_ui(self) -> None:
         if self._overlay_mode != "settings":
             return
+        self._apply_pending_settings()
         self._close_overlay_ui()
 
     def _refresh_settings_items(self) -> None:
@@ -289,7 +292,9 @@ class GameWindow(QMainWindow):
                     "key": "resolution",
                     "label": "Resolution",
                     "options": resolution_options,
-                    "selected_index": self._resolution_option_index(),
+                    "selected_index": self._resolution_option_index(
+                        self._pending_resolution_label
+                    ),
                 },
                 {
                     "key": "test_item",
@@ -302,14 +307,18 @@ class GameWindow(QMainWindow):
 
     def _on_setting_changed(self, key: str, value: str) -> None:
         if key == "resolution":
-            self._resolution_label = value
-            self._apply_game_resolution()
-            if self._game_window is not None and self._game_window.isVisible():
-                self._show_game_window()
+            self._pending_resolution_label = value
             return
 
         if key == "test_item":
             self._test_option_label = value
+
+    def _apply_pending_settings(self) -> None:
+        if self._resolution_label != self._pending_resolution_label:
+            self._resolution_label = self._pending_resolution_label
+            self._apply_game_resolution()
+            if self._game_window is not None and self._game_window.isVisible():
+                self._show_game_window()
 
     def _open_overlay_ui(self, mode: str, widget: QWidget) -> None:
         if self._overlay_mode is not None:
@@ -421,11 +430,12 @@ class GameWindow(QMainWindow):
     def _close_game_from_scene(self, confirm: bool = False) -> None:
         self.close_game_view(confirm=bool(confirm))
 
-    def _resolution_option_index(self) -> int:
+    def _resolution_option_index(self, label: str | None = None) -> int:
         resolution_options = [self.FULLSCREEN_RESOLUTION_LABEL]
         resolution_options.extend(label for label, _ in self.RESOLUTION_OPTIONS)
+        current_label = label if label is not None else self._resolution_label
         for index, label in enumerate(resolution_options):
-            if label == self._resolution_label:
+            if label == current_label:
                 return index
         return 0
 

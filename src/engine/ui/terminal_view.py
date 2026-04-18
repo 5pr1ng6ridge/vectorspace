@@ -6,16 +6,18 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import (
-    QFont,
     QInputMethodEvent,
-    QTextCursor,
     QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
     QKeySequence,
+    QTextCursor,
     QTextOption,
 )
 from PySide6.QtWidgets import QPlainTextEdit
 
-from ..resources.fonts import load_font_family
+from .crt_text_edit import CrtTextEdit
 
 
 
@@ -70,7 +72,7 @@ TerminalStep = Union[
 
 
 
-class TerminalView(QPlainTextEdit):
+class TerminalView(CrtTextEdit):
     """
     Terminal-like控件：
       - 输出和输入都在同一个区域
@@ -81,6 +83,9 @@ class TerminalView(QPlainTextEdit):
     """
     startGameRequested = Signal(str)
     collapseRequested = Signal()
+    CURSOR_BLINK_INTERVAL_MS = 530
+    CURSOR_HEIGHT_RATIO = 0.2
+    CURSOR_MIN_HEIGHT_PX = 2
 
     def __init__(self, parent=None, *, history_mode: bool = False) -> None:
         super().__init__(parent)
@@ -95,8 +100,13 @@ class TerminalView(QPlainTextEdit):
 
         self._prompt: str = "[VECTSPACE@system: ~]$ "
         self._input_start_pos: int = 0  # 当前输入行的开始位置（在整个文本中的下标）
+        self._terminal_cursor_pos: int = 0
         self._accept_input: bool = not self._history_mode
         self._collapse_on_down_enabled = False
+        self._cursor_blink_visible = True
+        self._cursor_blink_timer = QTimer(self)
+        self._cursor_blink_timer.setInterval(self.CURSOR_BLINK_INTERVAL_MS)
+        self._cursor_blink_timer.timeout.connect(self._toggle_cursor_blink)
 
         # 历史
         self._history: List[str] = []
@@ -110,6 +120,8 @@ class TerminalView(QPlainTextEdit):
         self._queue_running: bool = False
         
         self._apply_style()
+        if not self._history_mode:
+            self._cursor_blink_timer.start()
         if self._history_mode:
             self.setReadOnly(True)
             self.print_block("[ScriptHistory] ready.")
@@ -120,50 +132,7 @@ class TerminalView(QPlainTextEdit):
         
         
     def _apply_style(self) -> None:
-        font = self._load_pixel_font(19)
-        self.setFont(font)
-
-        self.setStyleSheet("""
-            TerminalView {
-                background-color: #101010;
-            }
-            QPlainTextEdit {
-                background-color: #101010;
-                color: #d8ffd8;
-                border: 1px solid #2f2f2f;
-                selection-background-color: #2d5a2d;
-            }
-            QLineEdit {
-                background-color: #101010;
-                color: #d8ffd8;
-                border: 1px solid #4a4a4a;
-                padding: 6px;
-                selection-background-color: #2d5a2d;
-            }
-        """)
-
-    def _load_pixel_font(self, size: int) -> QFont:
-        primary_family = load_font_family("fonts", "FSEX302.ttf")
-        fallback_family = load_font_family(
-            "fonts",
-            "fusion-pixel-12px-monospaced-zh_hans.ttf",
-        )
-
-        families: list[str] = []
-        if primary_family:
-            families.append(primary_family)
-        if fallback_family and fallback_family not in families:
-            families.append(fallback_family)
-
-        if families:
-            font = QFont()
-            font.setPointSize(size)
-            font.setFamilies(families)
-            return font
-
-        if fallback_family:
-            return QFont(fallback_family, size)
-        return QFont("monospace", size)
+        self.apply_crt_style(19)
 
     def _boot_text(self) -> None:
         self._accept_input = False
@@ -189,6 +158,7 @@ class TerminalView(QPlainTextEdit):
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.End)
         self.setTextCursor(cursor)
+        self._sync_terminal_cursor_from_editor()
         self.ensureCursorVisible()
 
     def print_line(self, text: str = "", wrap=False) -> None:
@@ -231,6 +201,7 @@ class TerminalView(QPlainTextEdit):
         cursor.insertText(self._prompt)
         # 记录输入起点（在整个文档中的位置）
         self._input_start_pos = cursor.position()
+        self._set_terminal_cursor_position(self._input_start_pos)
         self._scroll_to_bottom()
 
     def _current_input_text(self) -> str:
@@ -242,17 +213,15 @@ class TerminalView(QPlainTextEdit):
 
     def _move_cursor_to_input_end(self) -> None:
         """把光标钉在当前输入区末尾。"""
-        cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        if cursor.position() < self._input_start_pos:
-            cursor.setPosition(self._input_start_pos)
-        self.setTextCursor(cursor)
+        position = max(self._input_start_pos, self.document().characterCount() - 1)
+        self._set_terminal_cursor_position(position)
 
     def _append_newline_at_end(self) -> None:
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.End)
         self.setTextCursor(cursor)
         cursor.insertText("\n")
+        self._sync_terminal_cursor_from_editor()
         self._scroll_to_bottom()
 
     def _finish_terminal_sequence(self) -> None:
@@ -329,6 +298,12 @@ class TerminalView(QPlainTextEdit):
 
         cursor = self.textCursor()
         self.setTextCursor(cursor)
+        if cursor.hasSelection():
+            self._restore_editor_cursor()
+            cursor = self.textCursor()
+        elif cursor.position() < self._input_start_pos:
+            self._restore_editor_cursor()
+            cursor = self.textCursor()
         is_editing_input = (
             key in (Qt.Key_Backspace, Qt.Key_Delete)
             or event.matches(QKeySequence.Paste)
@@ -349,9 +324,7 @@ class TerminalView(QPlainTextEdit):
 
         # Home：跳到输入起点
         if key == Qt.Key_Home:
-            cursor = self.textCursor()
-            cursor.setPosition(self._input_start_pos)
-            self.setTextCursor(cursor)
+            self._set_terminal_cursor_position(self._input_start_pos)
             return
 
         # Backspace：不允许删到 prompt 左边
@@ -359,21 +332,32 @@ class TerminalView(QPlainTextEdit):
             cursor = self.textCursor()
             if cursor.position() <= self._input_start_pos:
                 return
-            return super().keyPressEvent(event)
+            super().keyPressEvent(event)
+            self._sync_terminal_cursor_from_editor()
+            return
 
         # Delete：不允许删到 prompt 左边
         if key == Qt.Key_Delete:
             cursor = self.textCursor()
             if cursor.position() < self._input_start_pos:
                 return
-            return super().keyPressEvent(event)
+            super().keyPressEvent(event)
+            self._sync_terminal_cursor_from_editor()
+            return
 
         # Left：不允许左移越过 prompt
         if key == Qt.Key_Left:
             cursor = self.textCursor()
             if cursor.position() <= self._input_start_pos:
                 return
-            return super().keyPressEvent(event)
+            super().keyPressEvent(event)
+            self._sync_terminal_cursor_from_editor()
+            return
+
+        if key == Qt.Key_Right:
+            super().keyPressEvent(event)
+            self._sync_terminal_cursor_from_editor()
+            return
 
         # Enter：提交命令
         if key in (Qt.Key_Return, Qt.Key_Enter):
@@ -406,6 +390,7 @@ class TerminalView(QPlainTextEdit):
 
         # 其他按键：正常处理（文本输入）
         super().keyPressEvent(event)
+        self._sync_terminal_cursor_from_editor()
 
     def inputMethodEvent(self, event: QInputMethodEvent) -> None:
         # 中文输入法等组合输入走这个事件，不走普通 keyPressEvent。
@@ -416,14 +401,16 @@ class TerminalView(QPlainTextEdit):
 
         cursor = self.textCursor()
         if cursor.hasSelection() or cursor.position() < self._input_start_pos:
-            self._move_cursor_to_input_end()
+            self._restore_editor_cursor()
 
         super().inputMethodEvent(event)
 
         # 兜底：IME 提交后若光标异常，再次拉回输入区
         cursor = self.textCursor()
         if cursor.position() < self._input_start_pos:
-            self._move_cursor_to_input_end()
+            self._restore_editor_cursor()
+        else:
+            self._sync_terminal_cursor_from_editor()
 
     # ---------------- 历史操作 ----------------
 
@@ -455,7 +442,94 @@ class TerminalView(QPlainTextEdit):
         cursor.setPosition(self._input_start_pos, QTextCursor.KeepAnchor)
         cursor.removeSelectedText()
         cursor.insertText(text)
+        self._sync_terminal_cursor_from_editor()
         self._scroll_to_bottom()
+
+    def _clamp_terminal_cursor_pos(self, position: int) -> int:
+        max_position = max(0, self.document().characterCount() - 1)
+        return max(self._input_start_pos, min(int(position), max_position))
+
+    def _set_terminal_cursor_position(self, position: int) -> None:
+        clamped_position = self._clamp_terminal_cursor_pos(position)
+        self._terminal_cursor_pos = clamped_position
+        cursor = self.textCursor()
+        cursor.setPosition(clamped_position)
+        self.setTextCursor(cursor)
+        self._reset_cursor_blink()
+        self.viewport().update()
+
+    def _restore_editor_cursor(self) -> None:
+        self._set_terminal_cursor_position(self._terminal_cursor_pos)
+
+    def _sync_terminal_cursor_from_editor(self) -> None:
+        self._terminal_cursor_pos = self._clamp_terminal_cursor_pos(
+            self.textCursor().position()
+        )
+        self._reset_cursor_blink()
+        self.viewport().update()
+
+    def _toggle_cursor_blink(self) -> None:
+        self._cursor_blink_visible = not self._cursor_blink_visible
+        self.viewport().update()
+
+    def _reset_cursor_blink(self) -> None:
+        self._cursor_blink_visible = True
+        if not self._history_mode:
+            self._cursor_blink_timer.start()
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self._reset_cursor_blink()
+        self.viewport().update()
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self._cursor_blink_visible = False
+        self.viewport().update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+
+        if (
+            self._history_mode
+            or not self._accept_input
+            or not self.hasFocus()
+            or not self._cursor_blink_visible
+        ):
+            return
+
+        cursor_position = self._clamp_terminal_cursor_pos(self._terminal_cursor_pos)
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(cursor_position)
+        cursor_rect = self.cursorRect(cursor)
+        plain_text = self.toPlainText()
+        current_char = ""
+        if cursor_position < len(plain_text):
+            current_char = plain_text[cursor_position]
+        cell_sample = current_char if current_char not in ("\n", "\r", "") else "M"
+        cell_width = max(1, self.fontMetrics().horizontalAdvance(cell_sample))
+        cursor_height = max(
+            self.CURSOR_MIN_HEIGHT_PX,
+            int(round(cursor_rect.height() * self.CURSOR_HEIGHT_RATIO)),
+        )
+        block_rect = cursor_rect
+        block_rect.setWidth(cell_width)
+        block_rect.setTop(block_rect.bottom() - cursor_height + 1)
+
+        painter = QPainter(self.viewport())
+        painter.fillRect(block_rect, self.palette().text().color())
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        super().mousePressEvent(event)
+        self.viewport().update()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        super().mouseMoveEvent(event)
+        self.viewport().update()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        super().mouseReleaseEvent(event)
+        self.viewport().update()
 
     # ---------------- 命令分发器 ----------------
 
