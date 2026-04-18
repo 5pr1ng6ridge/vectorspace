@@ -39,7 +39,7 @@ def build_scene() -> Iterator[SceneLinearItem]:
         x=1260,
         y=1000,
         scale=0.8,
-        z=10,above_web=True
+        z=10,
     )
     yield typing(
         speed_ms=24,
@@ -51,7 +51,7 @@ def build_scene() -> Iterator[SceneLinearItem]:
     ###################
     yield say(
         "ヨミビトシラズ",
-        "在不计其数的<span style=\"color: white;\"><i>archive</i></span>之上  在半径25cm的窗户上  注视着你 <pause ms=\"500\"/><h1 style=\"font-size:30px;\"><i><epsilon>掃いて捨てるほどの記録の上  半径25cmの窓で  きみを見ている  </epsilon></i></h1>",
+        "在不计其数的<span style=\"color: white;\"><i>archive</i></span>之上  在半径25cm的窗户上  注视着你 <pause ms=\"500\"/>\n<h1 style=\"font-size:30px;\"><i><epsilon>掃いて捨てるほどの記録の上  半径25cmの窓で  きみを見ている  </epsilon></i></h1>",
     )
     yield image_show(
         "idge",

@@ -361,7 +361,7 @@ class GameView(QWidget):
         """清空姓名与对话内容，避免切场景时残留上一句。"""
         self.set_name("")
         self.text_label.set_plain_dialogue("")
-        # 先隐藏文本层，避免 WebEngine 异步提交空内容前出现旧文本残影。
+        # 先隐藏文本层，避免切场景时短暂闪回旧文本。
         self.text_label.setVisible(False)
 
     def set_paused(self, paused: bool) -> None:
@@ -432,7 +432,7 @@ class GameView(QWidget):
 
         self._scene_noise_timer.stop()
         self._scene_noise_index = 0
-        # 噪声播放期间先隐藏对话 UI，避免 WebEngine 层级覆盖 noise。
+        # 噪声播放期间先隐藏对话 UI，避免过场和旧文本交叠。
         self._set_dialogue_ui_widgets_visible(False)
         self._apply_scene_noise_frame(0)
         self._scene_noise_overlay.show()
@@ -1669,7 +1669,7 @@ class GameView(QWidget):
         if callback is not None:
             callback()
 
-        # 稍后再恢复对话层，让 WebView 有机会完成空内容刷新。
+        # 稍后再恢复对话层，让清空后的状态稳定下来。
         QTimer.singleShot(self.NOISE_CLEAR_SETTLE_MS, self._restore_dialogue_ui_after_noise)
 
     def _restore_dialogue_ui_after_noise(self) -> None:

@@ -1,8 +1,8 @@
-"""对话文本渲染组件（Web 方案）。
+"""对话文本渲染组件（KaTeX Web 排版 + QWidget 显示层）。
 
 设计目标:
-1. 文本主体走 QWebEngineView，支持 KaTeX 与 CSS 动画。
-2. 逐字机与布局稳定并存：未显示内容透明占位，不触发行重排。
+1. 文本主体仍然走 KaTeX / HTML / CSS，保留原有视觉效果。
+2. 最终显示层不直接暴露 live 的 ``QWebEngineView``，避免其原生层级压过 Qt 普通控件。
 3. 对外接口保持简单：``set_text_segments`` / ``set_formula_text``。
 """
 
@@ -16,10 +16,12 @@ import os
 import re
 import sys
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt, QUrl
-from PySide6.QtGui import QColor, QFont, QKeySequence, QPixmap
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QPoint, QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPaintEvent, QPixmap
+from PySide6.QtWidgets import QWidget
+
 try:
-    from PySide6.QtWebEngineCore import QWebEngineSettings
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
     from PySide6.QtWebEngineWidgets import QWebEngineView
 except ModuleNotFoundError as exc:
     raise RuntimeError(
@@ -29,7 +31,6 @@ except ModuleNotFoundError as exc:
 from ..resources.paths import asset_path
 
 _DIALOGUE_FONT_ASSET = "fonts/fusion-pixel-12px-monospaced-zh_hans.ttf"
-# 仅解析并放行有限标签，避免脚本直接注入任意 HTML。
 _HTML_TAG_RE = re.compile(r"<\s*(/)?\s*([a-zA-Z][a-zA-Z0-9-]*)\s*([^<>]*?)\s*(/?)\s*>")
 _HTML_ATTR_RE = re.compile(
     r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')'
@@ -42,12 +43,16 @@ _FX_TAG_CLASS_MAP = {
     "glow": "fx-glow",
     "rainbow": "fx-rainbow",
     "epsilon": "fx-epsilon",
-    "delta": "fx-delta"
+    "delta": "fx-delta",
 }
 _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 _PAUSE_TAG_RE = re.compile(r"<\s*pause\b([^<>]*?)\s*/?\s*>", re.IGNORECASE)
 _SPEED_TAG_RE = re.compile(r"<\s*speed\b([^<>]*?)\s*/?\s*>", re.IGNORECASE)
 _HTML_BREAK_TAG_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
+_OFFSCREEN_RENDER_POS = QPoint(-32000, -32000)
+_CAPTURE_INTERVAL_MS = 16
+_FORMULA_CAPTURE_FRAMES = 16
+_TEXT_CAPTURE_FRAMES = 4
 
 
 def _is_truthy_env(name: str) -> bool:
@@ -80,6 +85,7 @@ class DialogueSegment:
     - ``formula``: ``$...$`` 公式
     - ``html``: 受控 HTML 标签
     """
+
     kind: str
     content: str
 
@@ -97,12 +103,7 @@ def _append_text_segment(segments: list[DialogueSegment], content: str) -> None:
 
 
 def _parse_span_attrs(attrs_text: str) -> str | None:
-    """解析并过滤 ``<span ...>`` 属性。
-
-    安全策略:
-    - 仅允许 ``class=...``
-    - class 值仅允许字母、数字、下划线、连字符与空格
-    """
+    """解析并过滤 ``<span ...>`` 属性。"""
     attrs_text = attrs_text.strip()
     if not attrs_text:
         return ""
@@ -136,7 +137,6 @@ def _parse_span_attrs(attrs_text: str) -> str | None:
 
 
 def _parse_pause_duration_literal(value: str, default_unit: str) -> int | None:
-
     token = value.strip().lower()
     if not token:
         return None
@@ -342,10 +342,7 @@ def _extract_speed_segment(text: str, start_index: int) -> tuple[int | None, int
 
 
 def _sanitize_html_tag(candidate: str) -> str | None:
-    """将候选标签规范化为可安全插入的 HTML。
-
-    返回 ``None`` 表示标签不被允许，会按普通文本处理。
-    """
+    """将候选标签规范化为可安全插入的 HTML。"""
     match = _HTML_TAG_RE.fullmatch(candidate)
     if match is None:
         return None
@@ -396,18 +393,12 @@ def _sanitize_html_tag(candidate: str) -> str | None:
 def _extract_supported_html_tag(
     text: str, start_index: int, allow_unsafe_html_tags: bool
 ) -> tuple[str | None, int]:
-    """从文本中提取受支持标签。
-
-    返回:
-    - (sanitized_tag, next_index): 成功
-    - (None, start_index): 失败
-    """
+    """从文本中提取受支持标签。"""
     candidate, next_index = _extract_inline_tag_candidate(text, start_index)
     if candidate is None:
         return None, start_index
 
     if allow_unsafe_html_tags:
-        # 开发阶段全放行时，仍优先保留内建标签规范化/简写映射（如 <rainbow> -> <span class="fx-rainbow">）。
         sanitized = _sanitize_html_tag(candidate)
         if sanitized is not None:
             return sanitized, next_index
@@ -423,13 +414,7 @@ def _extract_supported_html_tag(
 def parse_dialogue_segments(
     text: str, allow_unsafe_html_tags: bool | None = None
 ) -> list[DialogueSegment]:
-    """将对话文本解析为片段序列。
-
-    解析规则:
-    - ``$...$`` -> formula
-    - 受支持的 ``<tag>`` -> html
-    - 其余内容 -> text
-    """
+    """将对话文本解析为片段序列。"""
     allow_all_html = (
         _allow_unsafe_html_tags_by_default()
         if allow_unsafe_html_tags is None
@@ -534,13 +519,7 @@ def parse_dialogue_segments(
 
 
 def count_reveal_units(segments: list[DialogueSegment]) -> int:
-    """统计逐字机推进单位数。
-
-    约定:
-    - 文本按字符计数
-    - 公式按 1 个单位计数
-    - HTML 标签计 0（不会打断标签）
-    """
+    """统计逐字机推进单位数。"""
     total = 0
     for segment in segments:
         if segment.kind in {"formula", "formula_display"}:
@@ -600,12 +579,7 @@ def _protect_formula_for_markdown(formula_text: str) -> str:
 def _segments_to_html(
     segments: list[DialogueSegment], visible_units: int | None
 ) -> str:
-    """将片段拼装为 Markdown/HTML 混合文本。
-
-    注意:
-    - 未显示文本/公式使用 hidden-* class 占位，保持布局稳定。
-    - HTML 标签总是原样输出（受上游白名单保护）。
-    """
+    """将片段拼装为 Markdown/HTML 混合文本。"""
     remaining = visible_units
     parts: list[str] = []
 
@@ -656,6 +630,17 @@ def _escape_css_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _html_has_animated_effects(html_content: str) -> bool:
+    return any(css_class in html_content for css_class in _FX_TAG_CLASS_MAP.values())
+
+
+def _capture_burst_frames(html_content: str) -> int:
+    burst = _TEXT_CAPTURE_FRAMES
+    if "$" in html_content or "<img" in html_content:
+        burst = max(burst, _FORMULA_CAPTURE_FRAMES)
+    return burst
+
+
 def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> str:
     """构建 WebView 的完整 HTML 壳页面。"""
     fallback_family = _escape_css_string(font_family)
@@ -690,7 +675,10 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
       -webkit-user-select: none;
       -webkit-touch-callout: none;
     }}
-    #dialogue-root p {{
+    #dialogue-root p,
+    #dialogue-root h1,
+    #dialogue-root h2,
+    #dialogue-root h3 {{
       margin: 0;
     }}
     #dialogue-root .hidden-text,
@@ -786,6 +774,14 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
     window.__animSessionId = null;
     window.__animStartMs = null;
 
+    function __notifyRenderReady() {{
+      window.requestAnimationFrame(function() {{
+        window.requestAnimationFrame(function() {{
+          console.info("__VECTSPACE_RENDER_READY__");
+        }});
+      }});
+    }}
+
     function __syncAnimationTimeline(root) {{
       const sessionElem = root.querySelector("[data-anim-session]");
       const sessionId = sessionElem ? sessionElem.getAttribute("data-anim-session") : null;
@@ -815,7 +811,9 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
           setTimeout(function() {{
             window.__applyDialogueHtml(payload, currentAttempt + 1);
           }}, 16);
+          return;
         }}
+        __notifyRenderReady();
         return;
       }}
       window.renderMathInElement(root, {{
@@ -827,6 +825,7 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
         strict: "ignore"
       }});
       __syncAnimationTimeline(root);
+      __notifyRenderReady();
     }};
 
     window.__setPauseDim = function(enabled, alpha) {{
@@ -836,11 +835,13 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
       }}
       if (!enabled) {{
         root.style.filter = "";
+        __notifyRenderReady();
         return;
       }}
       const clamped = Math.max(0.0, Math.min(1.0, Number(alpha || 0)));
       const brightness = Math.max(0.0, 1.0 - clamped);
       root.style.filter = "brightness(" + brightness.toFixed(3) + ")";
+      __notifyRenderReady();
     }};
 
     document.addEventListener("copy", function(event) {{
@@ -864,13 +865,31 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
 """
 
 
-class DialogueTextView(QWebEngineView):
-    """对话 Web 控件。
+class _DialogueWebPage(QWebEnginePage):
+    renderReady = Signal()
 
-    协作约定:
-    - 渲染入口优先用 ``set_text_segments``。
-    - 样式调整走 ``set_text_style``，内部会保留当前内容并热更新页面。
+    def javaScriptConsoleMessage(
+        self,
+        level,
+        message: str,
+        line_number: int,
+        source_id: str,
+    ) -> None:
+        if message == "__VECTSPACE_RENDER_READY__":
+            self.renderReady.emit()
+            return
+        super().javaScriptConsoleMessage(level, message, line_number, source_id)
+
+
+class DialogueTextView(QWidget):
+    """对话 Web 控件的快照显示层。
+
+    方案:
+    - KaTeX / HTML / CSS 仍由一个离屏 ``QWebEngineView`` 负责排版和渲染
+    - 最终显示给场景的是普通 ``QWidget`` 的位图快照
+    - 因此叠层回到标准 Qt widget 行为，不再被 WebEngine 原生层压住
     """
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._font_family = "sans-serif"
@@ -883,20 +902,51 @@ class DialogueTextView(QWebEngineView):
         self._pause_dim_enabled = False
         self._pause_dim_alpha = 0.0
         self._base_url = self._resolve_assets_base_url()
+        self._snapshot = QPixmap()
+        self._pending_capture_frames = 0
+        self._continuous_capture = False
 
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setStyleSheet("background: transparent; border: none;")
         self.setContextMenuPolicy(Qt.NoContextMenu)
-        self.setFocusPolicy(Qt.NoFocus) 
+        self.setFocusPolicy(Qt.NoFocus)
 
-        self.page().setBackgroundColor(Qt.transparent)
-        settings = self.settings()
+        self._capture_timer = QTimer(self)
+        self._capture_timer.setInterval(_CAPTURE_INTERVAL_MS)
+        self._capture_timer.timeout.connect(self._capture_snapshot)
+
+        self._render_host = QWidget(
+            None,
+            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus,
+        )
+        self._render_host.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self._render_host.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._render_host.setStyleSheet("background: transparent; border: none;")
+        self._render_host.move(_OFFSCREEN_RENDER_POS)
+        self._render_host.resize(1, 1)
+
+        self._web_view = QWebEngineView(self._render_host)
+        self._web_view.setAttribute(Qt.WA_TranslucentBackground)
+        self._web_view.setStyleSheet("background: transparent; border: none;")
+        self._web_view.setContextMenuPolicy(Qt.NoContextMenu)
+        self._web_view.setFocusPolicy(Qt.NoFocus)
+
+        self._web_page = _DialogueWebPage(self._web_view)
+        self._web_view.setPage(self._web_page)
+        self._web_page.setBackgroundColor(Qt.transparent)
+        settings = self._web_view.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, False)
         settings.setAttribute(
             QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True
         )
 
-        self.loadFinished.connect(self._on_page_loaded)
+        self._web_view.loadFinished.connect(self._on_page_loaded)
+        self._web_page.renderReady.connect(self._on_web_render_ready)
+
+        self._sync_renderer_geometry()
+        self._render_host.show()
+        self._web_view.show()
         self._reload_shell()
 
     def setFont(self, font: QFont) -> None:
@@ -968,8 +1018,50 @@ class DialogueTextView(QWebEngineView):
         self._pause_dim_alpha = max(0.0, min(1.0, float(alpha)))
         self._apply_pause_dim()
 
+    def paintEvent(self, event: QPaintEvent) -> None:
+        del event
+        if self._snapshot.isNull():
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.drawPixmap(self.rect(), self._snapshot)
+        painter.end()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_renderer_geometry()
+        self._request_snapshot(frames=_capture_burst_frames(self._current_html))
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._update_capture_timer()
+        self._request_snapshot(frames=2)
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._update_capture_timer()
+
+    def keyPressEvent(self, event) -> None:
+        if event.matches(QKeySequence.Copy):
+            event.accept()
+            return
+
+        if event.modifiers() & Qt.ControlModifier and event.key() in (
+            Qt.Key_C,
+            Qt.Key_Insert,
+        ):
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.DeferredDelete:
+            self._dispose_renderer()
+        return super().event(event)
+
     def _reload_shell(self) -> None:
-        # 重载页面前保留当前内容，避免样式更新时出现闪空。
         self._page_ready = False
         self._pending_html = self._current_html
         shell_html = _build_shell_html(
@@ -977,14 +1069,16 @@ class DialogueTextView(QWebEngineView):
             font_size_px=self._font_size_px,
             color_hex=self._font_color,
         )
-        self.setHtml(shell_html, self._base_url)
+        self._web_view.setHtml(shell_html, self._base_url)
 
     def _set_content_html(self, html_content: str) -> None:
         self._current_html = html_content
+        self._continuous_capture = _html_has_animated_effects(html_content)
+        self._request_snapshot(frames=_capture_burst_frames(html_content))
         payload = json.dumps(html_content)
         script = f"window.__applyDialogueHtml({payload});"
         if self._page_ready:
-            self.page().runJavaScript(script)
+            self._web_page.runJavaScript(script)
             self._apply_pause_dim()
             return
         self._pending_html = html_content
@@ -998,12 +1092,67 @@ class DialogueTextView(QWebEngineView):
         self._set_content_html(self._pending_html)
         self._apply_pause_dim()
 
+    def _on_web_render_ready(self) -> None:
+        self._request_snapshot(frames=2)
+
+    def _request_snapshot(self, *, frames: int) -> None:
+        self._pending_capture_frames = max(self._pending_capture_frames, max(0, int(frames)))
+        self._update_capture_timer()
+
+    def _update_capture_timer(self) -> None:
+        should_capture = (
+            self.isVisible()
+            and self.width() > 0
+            and self.height() > 0
+            and (self._continuous_capture or self._pending_capture_frames > 0)
+        )
+        if should_capture and not self._capture_timer.isActive():
+            self._capture_timer.start()
+            return
+        if not should_capture and self._capture_timer.isActive():
+            self._capture_timer.stop()
+
+    def _capture_snapshot(self) -> None:
+        if self.width() <= 0 or self.height() <= 0:
+            self._update_capture_timer()
+            return
+
+        snapshot = self._web_view.grab()
+        if not snapshot.isNull():
+            self._snapshot = snapshot
+            self.update()
+
+        if self._pending_capture_frames > 0:
+            self._pending_capture_frames -= 1
+        self._update_capture_timer()
+
     def _wrap_with_anim_session(self, html_content: str) -> str:
         return (
             f'<div data-anim-session="{self._anim_session_id}">'
             f"{html_content}"
             "</div>"
         )
+
+    def _dispose_renderer(self) -> None:
+        render_host = getattr(self, "_render_host", None)
+        if render_host is None:
+            return
+        self._capture_timer.stop()
+        self._render_host = None
+        try:
+            render_host.hide()
+        except RuntimeError:
+            return
+        render_host.deleteLater()
+
+    def _sync_renderer_geometry(self) -> None:
+        if self._render_host is None:
+            return
+        width = max(1, self.width())
+        height = max(1, self.height())
+        self._render_host.move(_OFFSCREEN_RENDER_POS)
+        self._render_host.resize(width, height)
+        self._web_view.setGeometry(0, 0, width, height)
 
     def _resolve_assets_base_url(self) -> QUrl:
         """校验本地资源并返回 ``assets/`` 的 baseUrl。"""
@@ -1030,18 +1179,4 @@ class DialogueTextView(QWebEngineView):
         enabled_js = "true" if self._pause_dim_enabled else "false"
         alpha_js = f"{self._pause_dim_alpha:.3f}"
         script = f"window.__setPauseDim({enabled_js}, {alpha_js});"
-        self.page().runJavaScript(script)
-
-    def keyPressEvent(self, event) -> None:
-        if event.matches(QKeySequence.Copy):
-            event.accept()
-            return
-
-        if event.modifiers() & Qt.ControlModifier and event.key() in (
-            Qt.Key_C,
-            Qt.Key_Insert,
-        ):
-            event.accept()
-            return
-
-        super().keyPressEvent(event)
+        self._web_page.runJavaScript(script)
