@@ -100,10 +100,12 @@ def _apply_text_style_fields(
     text: str | None = None,
     font_size: int | None = None,
     color: str | None = None,
+    line_height: float | None = None,
 ) -> None:
     _set_optional(node, "text", text)
     _set_optional(node, "font_size", font_size, caster=int)
     _set_optional(node, "color", color)
+    _set_optional(node, "line_height", line_height, caster=float)
 
 
 def bg(file: str) -> SceneNode:
@@ -130,12 +132,14 @@ def style(
     *,
     font_size: int | None = None,
     color: str | None = None,
+    line_height: float | None = None,
     name_font_size: int | None = None,
     name_color: str | None = None,
 ) -> SceneNode:
     node = _node("style")
     _set_optional(node, "font_size", font_size, caster=int)
     _set_optional(node, "color", color)
+    _set_optional(node, "line_height", line_height, caster=float)
     _set_optional(node, "name_font_size", name_font_size, caster=int)
     _set_optional(node, "name_color", name_color)
     return node
@@ -282,6 +286,7 @@ def textbox_register(
     text: str | None = None,
     font_size: int | None = None,
     color: str | None = None,
+    line_height: float | None = None,
     x: float | None = None,
     y: float | None = None,
     scale: float | None = None,
@@ -299,7 +304,13 @@ def textbox_register(
         rect_h=float(rect_h),
         visible=bool(visible),
     )
-    _apply_text_style_fields(node, text=text, font_size=font_size, color=color)
+    _apply_text_style_fields(
+        node,
+        text=text,
+        font_size=font_size,
+        color=color,
+        line_height=line_height,
+    )
     _set_optional(node, "pos_x", x, caster=float)
     _set_optional(node, "pos_y", y, caster=float)
     _apply_visual_fields(node, scale=scale, opacity=opacity, z=z)
@@ -325,6 +336,7 @@ def textbox_show(
     text: str | None = None,
     font_size: int | None = None,
     color: str | None = None,
+    line_height: float | None = None,
     x: float | None = None,
     y: float | None = None,
     dx: float | None = None,
@@ -340,7 +352,13 @@ def textbox_show(
     wait: bool = False,
 ) -> SceneNode:
     node = _node("textbox_show", id=textbox_id, wait=bool(wait))
-    _apply_text_style_fields(node, text=text, font_size=font_size, color=color)
+    _apply_text_style_fields(
+        node,
+        text=text,
+        font_size=font_size,
+        color=color,
+        line_height=line_height,
+    )
     _apply_axis_fields(node, x=x, y=y, dx=dx, dy=dy)
     _apply_visual_fields(
         node,

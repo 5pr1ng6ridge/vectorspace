@@ -641,7 +641,12 @@ def _capture_burst_frames(html_content: str) -> int:
     return burst
 
 
-def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> str:
+def _build_shell_html(
+    font_family: str,
+    font_size_px: int,
+    color_hex: str,
+    line_height: float,
+) -> str:
     """构建 WebView 的完整 HTML 壳页面。"""
     fallback_family = _escape_css_string(font_family)
     return f"""<!doctype html>
@@ -668,7 +673,7 @@ def _build_shell_html(font_family: str, font_size_px: int, color_hex: str) -> st
       color: {color_hex};
       font-family: "VectspaceDialogue", "{fallback_family}", sans-serif;
       font-size: {font_size_px}px;
-      line-height: 1.35;
+      line-height: {line_height:.3f};
       word-break: break-word;
       white-space: pre-wrap;
       user-select: none;
@@ -895,6 +900,7 @@ class DialogueTextView(QWidget):
         self._font_family = "sans-serif"
         self._font_size_px = 24
         self._font_color = "#FFFFFF"
+        self._line_height = 1.35
         self._page_ready = False
         self._pending_html: str | None = None
         self._current_html = ""
@@ -956,7 +962,10 @@ class DialogueTextView(QWidget):
         self._reload_shell()
 
     def set_text_style(
-        self, font_size_px: int | None = None, color_hex: str | None = None
+        self,
+        font_size_px: int | None = None,
+        color_hex: str | None = None,
+        line_height: float | None = None,
     ) -> None:
         """动态更新字号与颜色。"""
         style_changed = False
@@ -974,6 +983,12 @@ class DialogueTextView(QWidget):
                 if normalized != self._font_color:
                     self._font_color = normalized
                     style_changed = True
+
+        if line_height is not None:
+            new_line_height = max(0.8, min(3.0, float(line_height)))
+            if abs(new_line_height - self._line_height) > 1e-6:
+                self._line_height = new_line_height
+                style_changed = True
 
         if style_changed:
             self._reload_shell()
@@ -1068,6 +1083,7 @@ class DialogueTextView(QWidget):
             font_family=self._font_family,
             font_size_px=self._font_size_px,
             color_hex=self._font_color,
+            line_height=self._line_height,
         )
         self._web_view.setHtml(shell_html, self._base_url)
 

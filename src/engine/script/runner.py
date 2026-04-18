@@ -670,6 +670,7 @@ class ScriptRunner:
             text=text if isinstance(text, str) else None,
             font_size=self._read_int(node, "font_size", "text_size"),
             color=self._read_str(node, "color", "text_color"),
+            line_height=self._read_float(node, "line_height", "line_spacing", "leading"),
             visible=self._read_bool(node, "visible", "show", default=False),
         )
 
@@ -712,6 +713,7 @@ class ScriptRunner:
             text=text if isinstance(text, str) else None,
             font_size=self._read_int(node, "font_size", "text_size"),
             color=self._read_str(node, "color", "text_color"),
+            line_height=self._read_float(node, "line_height", "line_spacing", "leading"),
             x=self._read_float(node, "x"),
             y=self._read_float(node, "y"),
             dx=self._read_float(node, "dx"),
@@ -1357,12 +1359,14 @@ class ScriptRunner:
     def _apply_style_node(self, node: dict[str, Any]) -> None:
         font_size = self._read_int(node, "font_size", "text_size")
         color = self._read_str(node, "color", "text_color")
+        line_height = self._read_float(node, "line_height", "line_spacing", "leading")
         name_font_size = self._read_int(node, "name_font_size", "name_size")
         name_color = self._read_str(node, "name_color")
 
         self.view.set_dialogue_style(
             font_size=font_size,
             color=color,
+            line_height=line_height,
             name_font_size=name_font_size,
             name_color=name_color,
         )

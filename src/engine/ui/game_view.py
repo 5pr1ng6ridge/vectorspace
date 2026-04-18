@@ -256,6 +256,7 @@ class GameView(QWidget):
         self,
         font_size: int | None = None,
         color: str | None = None,
+        line_height: float | None = None,
         name_font_size: int | None = None,
         name_color: str | None = None,
     ) -> None:
@@ -269,7 +270,11 @@ class GameView(QWidget):
                 f"color: {name_color}; background: transparent;"
             )
 
-        self.text_label.set_text_style(font_size_px=font_size, color_hex=color)
+        self.text_label.set_text_style(
+            font_size_px=font_size,
+            color_hex=color,
+            line_height=line_height,
+        )
 
     def _setup_typewriter_sfx(self) -> None:
         self._typewriter_sfx.setLoopCount(1)
@@ -493,6 +498,7 @@ class GameView(QWidget):
         text: str | None = None,
         font_size: int | None = None,
         color: str | None = None,
+        line_height: float | None = None,
         visible: bool = False,
     ) -> bool:
         key = textbox_id.strip()
@@ -551,8 +557,12 @@ class GameView(QWidget):
             self._set_extra_textbox_above_web(state, bool(above_web))
         if text is not None:
             state.view.set_plain_dialogue(text)
-        if font_size is not None or color is not None:
-            state.view.set_text_style(font_size_px=font_size, color_hex=color)
+        if font_size is not None or color is not None or line_height is not None:
+            state.view.set_text_style(
+                font_size_px=font_size,
+                color_hex=color,
+                line_height=line_height,
+            )
 
         self._apply_extra_textbox_state(state)
         self._refresh_extra_textboxes_stack()
@@ -581,6 +591,7 @@ class GameView(QWidget):
         text: str | None = None,
         font_size: int | None = None,
         color: str | None = None,
+        line_height: float | None = None,
         x: float | None = None,
         y: float | None = None,
         dx: float | None = None,
@@ -601,8 +612,12 @@ class GameView(QWidget):
 
         if text is not None:
             state.view.set_plain_dialogue(text)
-        if font_size is not None or color is not None:
-            state.view.set_text_style(font_size_px=font_size, color_hex=color)
+        if font_size is not None or color is not None or line_height is not None:
+            state.view.set_text_style(
+                font_size_px=font_size,
+                color_hex=color,
+                line_height=line_height,
+            )
         if z is not None:
             state.z = int(z)
             self._refresh_extra_textboxes_stack()

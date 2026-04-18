@@ -14,7 +14,8 @@ from src.engine.script.api import (
     bg, dialogue_ui_hide, dialogue_ui_show, 
     image_hide, image_register, image_show, image_transform,
     jump, say, style, 
-    textbox_hide, textbox_register, textbox_set_text, textbox_show, textbox_transform, typing
+    textbox_hide, textbox_register, textbox_set_text, textbox_show, textbox_transform, typing,
+    wait_click
 )
 SCENE_ID = "prologue"
 DEFAULTS = {
@@ -23,6 +24,7 @@ DEFAULTS = {
         "font_size": 33,
         "color": "#F5A9B8",
         "name_color": "#FFFFFF",
+        "line_height": 1.5
     },
     "typing": {"speed_ms": 25},
 }
@@ -128,7 +130,9 @@ def build_scene() -> Iterator[SceneLinearItem]:
         "这里可以放矩阵。",
     )
     yield textbox_set_text("hint", "这个文本框的内容是可以修改的。$E=mc^2$。")
+    yield wait_click()
     yield textbox_set_text("hint", "是可以修改的。$E=mc^2$。")
+    yield wait_click()
     yield textbox_hide("hint", duration_ms=180, easing="in_quad",wait=True)
     yield say("?", "by VECTSPACE vibe coding 开发组。vectorちゃん可愛い、大好き！偉いね、すごい、天才！(?")
     yield typing(speed_ms=3)
