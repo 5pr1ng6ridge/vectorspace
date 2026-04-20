@@ -140,6 +140,15 @@ class _ExtraTextBoxAnimation:
     on_finished: Callable[[], None] | None
 
 
+@dataclass
+class _PauseHintState:
+    description: str
+    label: QLabel
+    opacity_effect: QGraphicsOpacityEffect
+    base_y_design: float
+    strength: float = 0.0
+
+
 class GameView(QWidget):
     """承载游戏画面的主 Widget。"""
 
@@ -155,6 +164,25 @@ class GameView(QWidget):
     TYPEWRITER_SFX_DEFAULT_MIN_INTERVAL_MS = 40
     SCENE_NOISE_FRAME_MS = 67
     NOISE_CLEAR_SETTLE_MS = 67
+    PAUSE_FADE_IN_MS = 260
+    PAUSE_FADE_OUT_MS = 180
+    PAUSE_OVERLAY_MAX_OPACITY = 0.72
+    PAUSE_HINT_STAGGER_MS = 90
+    PAUSE_HINT_DURATION_MS = 260
+    PAUSE_HINT_START_X_DESIGN = 92.0
+    PAUSE_HINT_TOP_Y_DESIGN = 108.0
+    PAUSE_HINT_SPACING_DESIGN = 56.0
+    PAUSE_HINT_WIDTH_DESIGN = 420.0
+    PAUSE_HINT_HEIGHT_DESIGN = 44.0
+    PAUSE_HINT_SLIDE_OFFSET_DESIGN = 54.0
+    PAUSE_HINT_FONT_SIZE_DESIGN = 32
+    PAUSE_HINT_COLOR = "#D1D1D1"
+    PAUSE_HINT_ITEMS: tuple[str] = (
+        "RESUME",
+        "SAVE",
+        "SETTINGS",
+        "TERMINAL",
+    )
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -185,8 +213,24 @@ class GameView(QWidget):
         self._pause_overlay = QLabel(self)
         self._pause_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._pause_overlay.setAttribute(Qt.WA_AlwaysStackOnTop, True)
-        self._pause_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 160);")
+        self._pause_overlay.setStyleSheet("background-color: #000000;")
+        self._pause_overlay_effect = QGraphicsOpacityEffect(self._pause_overlay)
+        self._pause_overlay_effect.setOpacity(0.0)
+        self._pause_overlay.setGraphicsEffect(self._pause_overlay_effect)
         self._pause_overlay.hide()
+        self._pause_hint_root = QWidget(self)
+        self._pause_hint_root.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._pause_hint_root.hide()
+        self._pause_hints: list[_PauseHintState] = []
+        self._pause_overlay_strength = 0.0
+        self._pause_hint_strengths: list[float] = []
+        self._pause_hint_leave_strengths: list[float] = []
+        self._pause_ui_mode = "hidden"
+        self._pause_ui_started_at = 0.0
+        self._pause_leave_from_overlay = 0.0
+        self._pause_ui_timer = QTimer(self)
+        self._pause_ui_timer.setInterval(16)
+        self._pause_ui_timer.timeout.connect(self._on_pause_ui_tick)
         self._paused = False
         self._pause_started_at = 0.0
         self._paused_anim_timer_was_active = False
@@ -235,6 +279,7 @@ class GameView(QWidget):
         self._dialogue_color = "#FFFFFF"
         self._name_color = "#FFFFFF"
 
+        self._build_pause_hints()
         self._apply_fonts()
         self._setup_z_order()
 
@@ -248,6 +293,7 @@ class GameView(QWidget):
         self.text_label.raise_()
         self._scene_noise_overlay.raise_()
         self._pause_overlay.raise_()
+        self._pause_hint_root.raise_()
 
     def _apply_fonts(self) -> None:
         """加载像素字体并应用到姓名框和对话框。"""
@@ -259,6 +305,65 @@ class GameView(QWidget):
         self._apply_scaled_dialogue_style()
         for state in self._extra_textboxes.values():
             self._apply_scaled_extra_textbox_style(state)
+        self._apply_pause_ui_style()
+
+    def _build_pause_hints(self) -> None:
+        self._pause_hints.clear()
+        for index, item in enumerate(self.PAUSE_HINT_ITEMS):
+            label = QLabel(self._pause_hint_root)
+            label.setAttribute(Qt.WA_TranslucentBackground)
+            label.setTextFormat(Qt.PlainText)
+            label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            label.setStyleSheet(
+                f"color: {self.PAUSE_HINT_COLOR}; background: transparent;"
+            )
+            label.setText(f"{item}")
+            effect = QGraphicsOpacityEffect(label)
+            effect.setOpacity(0.0)
+            label.setGraphicsEffect(effect)
+            label.hide()
+            self._pause_hints.append(
+                _PauseHintState(
+                    description=item,
+                    label=label,
+                    opacity_effect=effect,
+                    base_y_design=(
+                        self.PAUSE_HINT_TOP_Y_DESIGN
+                        + index * self.PAUSE_HINT_SPACING_DESIGN
+                    ),
+                )
+            )
+        self._pause_hint_strengths = [0.0 for _ in self._pause_hints]
+        self._pause_hint_leave_strengths = [0.0 for _ in self._pause_hints]
+
+    def _terminal_font_family(size: int) -> QFont:
+        primary_family = load_font_family("fonts", "FSEX302.ttf")
+        fallback_family = load_font_family(
+            "fonts",
+            "fusion-pixel-12px-monospaced-zh_hans.ttf",
+        )
+
+        families: list[str] = []
+        if primary_family:
+            families.append(primary_family)
+        if fallback_family and fallback_family not in families:
+            families.append(fallback_family)
+
+        if families:
+            return families
+
+        if fallback_family:
+            return fallback_family
+        return "monospace"
+    
+    def _apply_pause_ui_style(self) -> None:
+        family = self._terminal_font_family() or self.font().family() or "sans-serif"
+        font = QFont(family)
+        font.setPixelSize(self._scaled_font_size(self.PAUSE_HINT_FONT_SIZE_DESIGN))
+        for state in self._pause_hints:
+            state.label.setFont(font)
+        self._update_pause_ui_geometry()
+        self._apply_pause_ui_state()
 
     def set_dialogue_style(
         self,
@@ -419,11 +524,13 @@ class GameView(QWidget):
 
     def set_paused(self, paused: bool) -> None:
         target = bool(paused)
-        if target == self._paused:
+        if target and self._paused:
+            return
+        if not target and not self._paused:
             return
 
-        self._paused = target
-        if self._paused:
+        if target:
+            self._paused = True
             self._pause_started_at = time.monotonic()
 
             self._paused_anim_timer_was_active = self._anim_timer.isActive()
@@ -436,11 +543,144 @@ class GameView(QWidget):
             self._dialogue_ui_timer.stop()
             self._scene_noise_timer.stop()
 
-            self._pause_overlay.setVisible(True)
-            self._pause_overlay.raise_()
             self.pauseStateChanged.emit(True)
+            self._start_pause_enter_animation()
             return
 
+        self._start_pause_exit_animation()
+
+    def _start_pause_enter_animation(self) -> None:
+        self._pause_ui_mode = "entering"
+        self._pause_ui_started_at = time.monotonic()
+        self._pause_overlay_strength = 0.0
+        for index, state in enumerate(self._pause_hints):
+            state.strength = 0.0
+            self._pause_hint_strengths[index] = 0.0
+        self._pause_overlay.show()
+        self._pause_hint_root.show()
+        self._pause_overlay.raise_()
+        self._pause_hint_root.raise_()
+        self._apply_pause_ui_state()
+        if not self._pause_ui_timer.isActive():
+            self._pause_ui_timer.start()
+
+    def _start_pause_exit_animation(self) -> None:
+        if self._pause_ui_mode == "leaving":
+            return
+        self._pause_ui_mode = "leaving"
+        self._pause_ui_started_at = time.monotonic()
+        self._pause_leave_from_overlay = self._pause_overlay_strength
+        self._pause_hint_leave_strengths = list(self._pause_hint_strengths)
+        if not self._pause_ui_timer.isActive():
+            self._pause_ui_timer.start()
+
+    def _on_pause_ui_tick(self) -> None:
+        if self._pause_ui_mode == "hidden":
+            self._pause_ui_timer.stop()
+            return
+
+        elapsed_ms = (time.monotonic() - self._pause_ui_started_at) * 1000.0
+        if self._pause_ui_mode == "entering":
+            fade_curve = self._make_easing_curve("out_quad")
+            hint_curve = self._make_easing_curve("out_circ")
+            overlay_progress = min(
+                1.0,
+                max(0.0, elapsed_ms / float(self.PAUSE_FADE_IN_MS)),
+            )
+            self._pause_overlay_strength = float(
+                fade_curve.valueForProgress(overlay_progress)
+            )
+
+            all_hints_visible = True
+            for index, state in enumerate(self._pause_hints):
+                hint_elapsed = elapsed_ms - index * self.PAUSE_HINT_STAGGER_MS
+                if hint_elapsed <= 0.0:
+                    strength = 0.0
+                    all_hints_visible = False
+                else:
+                    hint_progress = min(
+                        1.0,
+                        max(0.0, hint_elapsed / float(self.PAUSE_HINT_DURATION_MS)),
+                    )
+                    strength = float(hint_curve.valueForProgress(hint_progress))
+                    if hint_progress < 1.0:
+                        all_hints_visible = False
+                state.strength = strength
+                self._pause_hint_strengths[index] = strength
+
+            self._apply_pause_ui_state()
+            if overlay_progress >= 1.0 and all_hints_visible:
+                self._pause_ui_mode = "visible"
+                self._pause_ui_timer.stop()
+            return
+
+        if self._pause_ui_mode == "visible":
+            self._pause_ui_timer.stop()
+            return
+
+        fade_progress = min(
+            1.0,
+            max(0.0, elapsed_ms / float(self.PAUSE_FADE_OUT_MS)),
+        )
+        fade_multiplier = 1.0 - fade_progress
+        self._pause_overlay_strength = self._pause_leave_from_overlay * fade_multiplier
+        for index, state in enumerate(self._pause_hints):
+            strength = self._pause_hint_leave_strengths[index] * fade_multiplier
+            state.strength = strength
+            self._pause_hint_strengths[index] = strength
+
+        self._apply_pause_ui_state()
+        if fade_progress >= 1.0:
+            self._finish_pause_exit()
+
+    def _apply_pause_ui_state(self) -> None:
+        overlay_opacity = (
+            self.PAUSE_OVERLAY_MAX_OPACITY
+            * self._clamp_opacity(self._pause_overlay_strength)
+        )
+        self._pause_overlay_effect.setOpacity(overlay_opacity)
+        overlay_visible = overlay_opacity > 0.001 or self._pause_ui_mode != "hidden"
+        self._pause_overlay.setVisible(overlay_visible)
+        self._pause_hint_root.setVisible(overlay_visible)
+        self._update_pause_ui_geometry()
+
+        any_hint_visible = False
+        for state in self._pause_hints:
+            hint_opacity = self._clamp_opacity(state.strength)
+            state.opacity_effect.setOpacity(hint_opacity)
+            state.label.setVisible(hint_opacity > 0.001)
+            any_hint_visible = any_hint_visible or hint_opacity > 0.001
+
+        if not any_hint_visible and self._pause_ui_mode == "hidden":
+            self._pause_hint_root.hide()
+
+    def _update_pause_ui_geometry(self) -> None:
+        self._pause_overlay.setGeometry(self.rect())
+        self._pause_hint_root.setGeometry(self.rect())
+
+        sx = self.width() / float(self.DESIGN_WIDTH) if self.width() > 0 else 1.0
+        sy = self.height() / float(self.DESIGN_HEIGHT) if self.height() > 0 else 1.0
+        target_width = max(1, int(round(self.PAUSE_HINT_WIDTH_DESIGN * sx)))
+        target_height = max(1, int(round(self.PAUSE_HINT_HEIGHT_DESIGN * sy)))
+        for state in self._pause_hints:
+            x_design = self.PAUSE_HINT_START_X_DESIGN - (
+                1.0 - state.strength
+            ) * self.PAUSE_HINT_SLIDE_OFFSET_DESIGN
+            x_px = int(round(x_design * sx))
+            y_px = int(round(state.base_y_design * sy))
+            state.label.setGeometry(x_px, y_px, target_width, target_height)
+
+    def _finish_pause_exit(self) -> None:
+        self._pause_ui_timer.stop()
+        self._pause_ui_mode = "hidden"
+        self._pause_overlay_strength = 0.0
+        self._pause_leave_from_overlay = 0.0
+        for index, state in enumerate(self._pause_hints):
+            state.strength = 0.0
+            self._pause_hint_strengths[index] = 0.0
+        self._apply_pause_ui_state()
+        self._pause_overlay.hide()
+        self._pause_hint_root.hide()
         paused_seconds = max(0.0, time.monotonic() - self._pause_started_at)
         if paused_seconds > 0.0:
             for anim in self._sprite_anims.values():
@@ -459,11 +699,11 @@ class GameView(QWidget):
         if self._paused_scene_noise_timer_was_active and self._scene_noise_overlay.isVisible():
             self._scene_noise_timer.start()
 
+        self._paused = False
         self._paused_anim_timer_was_active = False
         self._paused_extra_textbox_timer_was_active = False
         self._paused_dialogue_ui_timer_was_active = False
         self._paused_scene_noise_timer_was_active = False
-        self._pause_overlay.setVisible(False)
         self._setup_z_order()
         self.pauseStateChanged.emit(False)
 
@@ -1756,11 +1996,11 @@ class GameView(QWidget):
 
         self._update_bg_geometry()
         self.sprite_root.setGeometry(self.rect())
-        self._pause_overlay.setGeometry(self.rect())
         self._scene_noise_overlay.setGeometry(self.rect())
         if self._scene_noise_overlay.isVisible():
             self._apply_scene_noise_frame(self._scene_noise_index)
         self._apply_scaled_dialogue_style()
+        self._apply_pause_ui_style()
         for state in self._extra_textboxes.values():
             self._apply_scaled_extra_textbox_style(state)
         self._update_dialogue_ui_geometry()

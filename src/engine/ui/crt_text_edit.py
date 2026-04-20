@@ -26,7 +26,7 @@ class CrtTextEdit(QPlainTextEdit):
     VIGNETTE_ALPHA = 110
     APERTURE_GRILLE_ALPHA = 16
     NOISE_ALPHA = 26
-    SWEEP_ALPHA = 54
+    SWEEP_ALPHA = 14
     BORDER_GLOW_ALPHA = 72
     GLASS_GLARE_ALPHA = 36
     CORNER_RADIUS_PX = 18
@@ -34,7 +34,7 @@ class CrtTextEdit(QPlainTextEdit):
     ENABLE_APERTURE_GRILLE = True
     ENABLE_SCANLINES = True
     ENABLE_VIGNETTE = True
-    ENABLE_SCAN_SWEEP = False
+    ENABLE_SCAN_SWEEP = True
     ENABLE_NOISE = False
     ENABLE_GLASS_GLARE = False
     ENABLE_BEZEL = False
