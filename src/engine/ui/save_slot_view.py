@@ -13,6 +13,7 @@ class SaveSlotView(CrtTextEdit):
     closeRequested = Signal()
     saveRequested = Signal(int)
     loadRequested = Signal(int)
+    ENABLE_FULLSCREEN_POSTPROCESS = True
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -117,4 +118,4 @@ class SaveSlotView(CrtTextEdit):
         self.ensureCursorVisible()
 
     def _apply_style(self) -> None:
-        self.apply_crt_style(22)
+        self.apply_crt_style(18)

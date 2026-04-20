@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget, QWidget
 from .save_system import SaveSystem
 from .scene_manager import SceneManager
 from .ui.game_view import GameView
+from .ui.crt_text_edit import CrtTextEdit
 from .ui.save_slot_view import SaveSlotView
 from .ui.settings_view import SettingsView
 from .ui.terminal_view import TerminalView
@@ -277,6 +278,11 @@ class GameWindow(QMainWindow):
         self._refresh_settings_items()
         self._open_overlay_ui("settings", self.settings_view)
 
+    @staticmethod
+    def _prepare_widget_fullscreen_crt(widget: QWidget) -> None:
+        if isinstance(widget, CrtTextEdit):
+            widget.prepare_fullscreen_postprocess()
+
     def _close_settings_ui(self) -> None:
         if self._overlay_mode != "settings":
             return
@@ -334,6 +340,7 @@ class GameWindow(QMainWindow):
             self._game_view.set_paused(True)
 
         self._stack.setCurrentWidget(widget)
+        self._prepare_widget_fullscreen_crt(widget)
         self.showFullScreen()
         self.raise_()
         self.activateWindow()
@@ -349,7 +356,7 @@ class GameWindow(QMainWindow):
         self.lower()
 
         if self._game_view is not None and self._resume_game_after_overlay:
-            self._game_view.set_paused(False)
+            self._game_view.set_paused(False, animate=False)
         self._resume_game_after_overlay = False
 
         if self._game_window is not None and self._game_window.isVisible():
@@ -406,6 +413,7 @@ class GameWindow(QMainWindow):
         self._resume_game_after_overlay = False
         self._stack.setCurrentWidget(self.terminal_view)
         self.terminal_view.set_collapse_on_down_enabled(False)
+        self._prepare_widget_fullscreen_crt(self.terminal_view)
         self.showFullScreen()
         self.raise_()
         self.activateWindow()

@@ -86,6 +86,7 @@ class TerminalView(CrtTextEdit):
     CURSOR_BLINK_INTERVAL_MS = 530
     CURSOR_HEIGHT_RATIO = 0.2
     CURSOR_MIN_HEIGHT_PX = 2
+    ENABLE_FULLSCREEN_POSTPROCESS = True
 
     def __init__(self, parent=None, *, history_mode: bool = False) -> None:
         super().__init__(parent)
@@ -132,7 +133,7 @@ class TerminalView(CrtTextEdit):
         
         
     def _apply_style(self) -> None:
-        self.apply_crt_style(19)
+        self.apply_crt_style(24)
 
     def _boot_text(self) -> None:
         self._accept_input = False
@@ -513,18 +514,21 @@ class TerminalView(CrtTextEdit):
         block_rect.setTop(block_rect.bottom() - cursor_height + 1)
         return block_rect
 
-    def _cursor_overlay_rect(self, position: int | None = None) -> QRect:
+    def _cursor_dirty_rect(self, position: int | None = None) -> QRect:
         return self._cursor_block_rect(position).adjusted(-2, -2, 2, 2)
 
     def _update_cursor_overlay(self, previous_position: int | None = None) -> None:
-        dirty_rect = self._cursor_overlay_rect()
+        if self.is_fullscreen_postprocess_active():
+            self.viewport().update()
+            return
+
+        dirty_rect = self._cursor_dirty_rect()
         if previous_position is not None:
-            dirty_rect = dirty_rect.united(self._cursor_overlay_rect(previous_position))
+            dirty_rect = dirty_rect.united(self._cursor_dirty_rect(previous_position))
         self.viewport().update(dirty_rect)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
-
         if (
             self._history_mode
             or not self._accept_input
@@ -534,7 +538,11 @@ class TerminalView(CrtTextEdit):
             return
 
         cursor_position = self._clamp_terminal_cursor_pos(self._terminal_cursor_pos)
-        block_rect = self._cursor_block_rect(cursor_position)
+        block_rect = self._cursor_block_rect(cursor_position).intersected(
+            self.viewport().rect()
+        )
+        if block_rect.isEmpty():
+            return
 
         painter = QPainter(self.viewport())
         painter.fillRect(block_rect, self.palette().text().color())
@@ -652,6 +660,41 @@ class TerminalView(CrtTextEdit):
             PrintLineStep("                                                        [ timeout ]\n",10),
             PrintLineStep("                                                        [ timeout ]\n",10),
             PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",10),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
+            PrintLineStep("                                                        [ timeout ]\n",1),
             PrintLineStep("  *\n",10),
             PrintLineStep("  *\n",10),
             PrintLineStep("  *\n",10),
@@ -667,8 +710,8 @@ class TerminalView(CrtTextEdit):
             PrintLineStep("  *\n",10),
             PrintLineStep("  *\n",10),
             PrintLineStep("  *\n",10),
-            PrintLineStep("\n",2500),
-            PrintLineStep("Fatal: VECTSPACE not responding\n"),
+            PrintLineStep("\n",10),
+            PrintLineStep("Fatal: VECTSPACE not responding\n",150),
             #CallbackStep(self._finish_terminal_sequence, 10),
             CallbackStep(lambda: self._jump_to_gameview(target_scene)),
         ]

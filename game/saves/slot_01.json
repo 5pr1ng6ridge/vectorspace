@@ -2,11 +2,11 @@
   "scene_name": "prologue",
   "runner_state": {
     "scene_name": "prologue",
-    "index": 26,
-    "resume_mode": "wait_click"
+    "index": 16,
+    "resume_mode": "say_wait"
   },
   "persistent_state": {},
   "title": "Archive Slot 01",
   "slot_index": 0,
-  "saved_at": "2026-04-18 22:56:18"
+  "saved_at": "2026-04-19 23:23:06"
 }

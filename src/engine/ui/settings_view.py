@@ -12,6 +12,7 @@ from .crt_text_edit import CrtTextEdit
 class SettingsView(CrtTextEdit):
     closeRequested = Signal()
     settingChanged = Signal(str, str)
+    ENABLE_FULLSCREEN_POSTPROCESS = True
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

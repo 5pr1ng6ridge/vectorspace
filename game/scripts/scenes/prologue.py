@@ -65,7 +65,7 @@ def build_scene() -> Iterator[SceneLinearItem]:
     yield style(font_size=43, color="#F5A9B8", name_font_size=40, name_color="#FFFFFF")
     yield say(
         "?",
-        "ciallo~<shake><rainbow>这是一行测试文本这是一行测试文本</rainbow></shake>$f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本！@#￥%……&*（",
+        "ciallo~<shake><rainbow>这是一行测试文本test.text。test，text,</rainbow></shake>$f'(x) = \\lim_{\\Delta x \\to 0} \\frac{f(x+\\Delta x)-f(x)}{\\Delta x} $这是一行测试文本！@#￥%……&*（",
     )
     yield image_transform(
         "idge",

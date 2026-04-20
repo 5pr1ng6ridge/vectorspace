@@ -142,7 +142,9 @@ class _ExtraTextBoxAnimation:
 
 @dataclass
 class _PauseHintState:
-    description: str
+    content: str
+    font_size_design: int
+    row_height_design: float
     label: QLabel
     opacity_effect: QGraphicsOpacityEffect
     base_y_design: float
@@ -171,17 +173,19 @@ class GameView(QWidget):
     PAUSE_HINT_DURATION_MS = 260
     PAUSE_HINT_START_X_DESIGN = 92.0
     PAUSE_HINT_TOP_Y_DESIGN = 108.0
-    PAUSE_HINT_SPACING_DESIGN = 56.0
-    PAUSE_HINT_WIDTH_DESIGN = 420.0
-    PAUSE_HINT_HEIGHT_DESIGN = 44.0
+    PAUSE_HINT_SPACING_DESIGN = 14.0
+    PAUSE_HINT_WIDTH_DESIGN = 1420.0
+    PAUSE_HINT_HEIGHT_DESIGN = 24.0
     PAUSE_HINT_SLIDE_OFFSET_DESIGN = 54.0
     PAUSE_HINT_FONT_SIZE_DESIGN = 32
-    PAUSE_HINT_COLOR = "#D1D1D1"
-    PAUSE_HINT_ITEMS: tuple[str] = (
-        "RESUME",
-        "SAVE",
-        "SETTINGS",
-        "TERMINAL",
+    PAUSE_HINT_COLOR = "#d8ffd8"
+    PAUSE_HINT_ITEMS: tuple[tuple[str, int], ...] = (
+        ("Visualization_Frozen", 64),
+        (" ", 12),
+        ("esc:   返回 ", 42),
+        ("S:     保存 ", 42),
+        ("P:     设置 ", 42),
+        ("↑:     终端 ", 42),
     )
 
     def __init__(self, parent=None) -> None:
@@ -309,7 +313,13 @@ class GameView(QWidget):
 
     def _build_pause_hints(self) -> None:
         self._pause_hints.clear()
-        for index, item in enumerate(self.PAUSE_HINT_ITEMS):
+        current_y_design = self.PAUSE_HINT_TOP_Y_DESIGN
+        for item in self.PAUSE_HINT_ITEMS:
+            content, font_size_design = self._normalize_pause_hint_item(item)
+            row_height_design = max(
+                self.PAUSE_HINT_HEIGHT_DESIGN,
+                float(font_size_design) + 14.0,
+            )
             label = QLabel(self._pause_hint_root)
             label.setAttribute(Qt.WA_TranslucentBackground)
             label.setTextFormat(Qt.PlainText)
@@ -317,26 +327,35 @@ class GameView(QWidget):
             label.setStyleSheet(
                 f"color: {self.PAUSE_HINT_COLOR}; background: transparent;"
             )
-            label.setText(f"{item}")
+            label.setText(content)
             effect = QGraphicsOpacityEffect(label)
             effect.setOpacity(0.0)
             label.setGraphicsEffect(effect)
             label.hide()
             self._pause_hints.append(
                 _PauseHintState(
-                    description=item,
+                    content=content,
+                    font_size_design=font_size_design,
+                    row_height_design=row_height_design,
                     label=label,
                     opacity_effect=effect,
-                    base_y_design=(
-                        self.PAUSE_HINT_TOP_Y_DESIGN
-                        + index * self.PAUSE_HINT_SPACING_DESIGN
-                    ),
+                    base_y_design=current_y_design,
                 )
             )
+            current_y_design += row_height_design + self.PAUSE_HINT_SPACING_DESIGN
         self._pause_hint_strengths = [0.0 for _ in self._pause_hints]
         self._pause_hint_leave_strengths = [0.0 for _ in self._pause_hints]
 
-    def _terminal_font_family(size: int) -> QFont:
+    @staticmethod
+    def _normalize_pause_hint_item(item: str | tuple[str, int]) -> tuple[str, int]:
+        if isinstance(item, tuple) and len(item) >= 2:
+            content = str(item[0])
+            font_size = max(1, int(item[1]))
+            return content, font_size
+        return str(item), GameView.PAUSE_HINT_FONT_SIZE_DESIGN
+
+    @staticmethod
+    def _terminal_font_families() -> list[str]:
         primary_family = load_font_family("fonts", "FSEX302.ttf")
         fallback_family = load_font_family(
             "fonts",
@@ -353,14 +372,15 @@ class GameView(QWidget):
             return families
 
         if fallback_family:
-            return fallback_family
-        return "monospace"
+            return [fallback_family]
+        return ["monospace"]
     
     def _apply_pause_ui_style(self) -> None:
-        family = self._terminal_font_family() or self.font().family() or "sans-serif"
-        font = QFont(family)
-        font.setPixelSize(self._scaled_font_size(self.PAUSE_HINT_FONT_SIZE_DESIGN))
+        families = self._terminal_font_families()
         for state in self._pause_hints:
+            font = QFont()
+            font.setFamilies(families)
+            font.setPixelSize(self._scaled_font_size(state.font_size_design))
             state.label.setFont(font)
         self._update_pause_ui_geometry()
         self._apply_pause_ui_state()
@@ -522,7 +542,7 @@ class GameView(QWidget):
         # 先隐藏文本层，避免切场景时短暂闪回旧文本。
         self.text_label.setVisible(False)
 
-    def set_paused(self, paused: bool) -> None:
+    def set_paused(self, paused: bool, *, animate: bool = True) -> None:
         target = bool(paused)
         if target and self._paused:
             return
@@ -545,6 +565,10 @@ class GameView(QWidget):
 
             self.pauseStateChanged.emit(True)
             self._start_pause_enter_animation()
+            return
+
+        if not animate:
+            self._finish_pause_exit()
             return
 
         self._start_pause_exit_animation()
@@ -661,13 +685,13 @@ class GameView(QWidget):
         sx = self.width() / float(self.DESIGN_WIDTH) if self.width() > 0 else 1.0
         sy = self.height() / float(self.DESIGN_HEIGHT) if self.height() > 0 else 1.0
         target_width = max(1, int(round(self.PAUSE_HINT_WIDTH_DESIGN * sx)))
-        target_height = max(1, int(round(self.PAUSE_HINT_HEIGHT_DESIGN * sy)))
         for state in self._pause_hints:
             x_design = self.PAUSE_HINT_START_X_DESIGN - (
                 1.0 - state.strength
             ) * self.PAUSE_HINT_SLIDE_OFFSET_DESIGN
             x_px = int(round(x_design * sx))
             y_px = int(round(state.base_y_design * sy))
+            target_height = max(1, int(round(state.row_height_design * sy)))
             state.label.setGeometry(x_px, y_px, target_width, target_height)
 
     def _finish_pause_exit(self) -> None:
