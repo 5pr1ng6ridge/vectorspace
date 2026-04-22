@@ -158,6 +158,11 @@ class DesktopIconButton(QWidget):
     def _apply_text_font(self) -> None:
         self._text_label.setFont(self._load_ui_font(14))
 
+    def set_text_font_size(self, size: int) -> None:
+        self._text_label.setFont(self._load_ui_font(max(1, int(size))))
+        self.updateGeometry()
+        self.update()
+
     def text(self) -> str:
         return self._text
 

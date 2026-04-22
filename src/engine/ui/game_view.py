@@ -15,6 +15,7 @@ from PySide6.QtMultimedia import QSoundEffect
 from ..resources.fonts import load_font_family
 from ..resources.paths import asset_path
 from .dialogue_text import DialogueSegment, DialogueTextView
+from .sidebar_drawer import SidebarDrawer
 
 
 _IMAGE_SEARCH_FOLDERS = (
@@ -156,6 +157,7 @@ class GameView(QWidget):
 
     advanceRequested = Signal()
     pauseStateChanged = Signal(bool)
+    sidebarActionRequested = Signal(str)
 
     DESIGN_WIDTH = 1920
     DESIGN_HEIGHT = 1080
@@ -179,6 +181,38 @@ class GameView(QWidget):
     PAUSE_HINT_SLIDE_OFFSET_DESIGN = 54.0
     PAUSE_HINT_FONT_SIZE_DESIGN = 32
     PAUSE_HINT_COLOR = "#d8ffd8"
+    SIDEBAR_PANEL_WIDTH_DESIGN = 188.0
+    SIDEBAR_HANDLE_WIDTH_DESIGN = 28.0
+    SIDEBAR_HANDLE_HEIGHT_DESIGN = 96.0
+    SIDEBAR_TOP_MARGIN_DESIGN = 54.0
+    SIDEBAR_RIGHT_MARGIN_DESIGN = 18.0
+    SIDEBAR_BOTTOM_MARGIN_DESIGN = 316.0
+    SIDEBAR_ITEMS = (
+        {
+            "id": "save",
+            "label": "SAVE",
+            "icon_asset": ("ui", "sidebar_demo", "save.png"),
+            "accent": "#6AA9FF",
+        },
+        {
+            "id": "settings",
+            "label": "SETTINGS",
+            "icon_asset": ("ui", "sidebar_demo", "settings.png"),
+            "accent": "#FFD36A",
+        },
+        {
+            "id": "terminal",
+            "label": "TERMINAL",
+            "icon_asset": ("ui", "sidebar_demo", "terminal.png"),
+            "accent": "#7BF0C8",
+        },
+        {
+            "id": "pause",
+            "label": "PAUSE",
+            "icon_asset": ("ui", "sidebar_demo", "pause.png"),
+            "accent": "#FF8E9E",
+        },
+    )
     PAUSE_HINT_ITEMS: tuple[tuple[str, int], ...] = (
         ("Visualization_Frozen", 64),
         (" ", 12),
@@ -245,6 +279,9 @@ class GameView(QWidget):
         self._scene_noise_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._scene_noise_overlay.setScaledContents(True)
         self._scene_noise_overlay.hide()
+        self._sidebar_drawer = SidebarDrawer(self)
+        self._sidebar_drawer.set_items(list(self.SIDEBAR_ITEMS))
+        self._sidebar_drawer.itemTriggered.connect(self._on_sidebar_item_triggered)
 
         self._asset_resolve_cache: dict[tuple[str, str | None], str | None] = {}
         self._audio_resolve_cache: dict[tuple[str, str | None], str | None] = {}
@@ -285,6 +322,7 @@ class GameView(QWidget):
 
         self._build_pause_hints()
         self._apply_fonts()
+        self._update_sidebar_geometry()
         self._setup_z_order()
 
     def _setup_z_order(self) -> None:
@@ -295,6 +333,7 @@ class GameView(QWidget):
         self.ui_overlay.raise_()
         self.name_label.raise_()
         self.text_label.raise_()
+        self._sidebar_drawer.raise_()
         self._scene_noise_overlay.raise_()
         self._pause_overlay.raise_()
         self._pause_hint_root.raise_()
@@ -693,6 +732,27 @@ class GameView(QWidget):
             y_px = int(round(state.base_y_design * sy))
             target_height = max(1, int(round(state.row_height_design * sy)))
             state.label.setGeometry(x_px, y_px, target_width, target_height)
+
+    def _update_sidebar_geometry(self) -> None:
+        sx = self.width() / float(self.DESIGN_WIDTH) if self.width() > 0 else 1.0
+        sy = self.height() / float(self.DESIGN_HEIGHT) if self.height() > 0 else 1.0
+        self._sidebar_drawer.set_sidebar_metrics(
+            panel_width=int(round(self.SIDEBAR_PANEL_WIDTH_DESIGN * sx)),
+            handle_width=int(round(self.SIDEBAR_HANDLE_WIDTH_DESIGN * sx)),
+            handle_height=int(round(self.SIDEBAR_HANDLE_HEIGHT_DESIGN * sy)),
+            top_margin=int(round(self.SIDEBAR_TOP_MARGIN_DESIGN * sy)),
+            bottom_margin=int(round(self.SIDEBAR_BOTTOM_MARGIN_DESIGN * sy)),
+            right_margin=int(round(self.SIDEBAR_RIGHT_MARGIN_DESIGN * sx)),
+        )
+
+    def _on_sidebar_item_triggered(self, action_id: str) -> None:
+        action = str(action_id).strip().lower()
+        if not action:
+            return
+        if action == "pause":
+            self.toggle_paused()
+            return
+        self.sidebarActionRequested.emit(action)
 
     def _finish_pause_exit(self) -> None:
         self._pause_ui_timer.stop()
@@ -2025,6 +2085,7 @@ class GameView(QWidget):
             self._apply_scene_noise_frame(self._scene_noise_index)
         self._apply_scaled_dialogue_style()
         self._apply_pause_ui_style()
+        self._update_sidebar_geometry()
         for state in self._extra_textboxes.values():
             self._apply_scaled_extra_textbox_style(state)
         self._update_dialogue_ui_geometry()

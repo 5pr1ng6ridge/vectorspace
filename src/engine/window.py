@@ -138,6 +138,7 @@ class GameWindow(QMainWindow):
         game_window.setCentralWidget(game_view)
         game_window.installEventFilter(self)
         game_view.installEventFilter(self)
+        game_view.sidebarActionRequested.connect(self._handle_game_sidebar_action)
 
         shortcut_up = QShortcut(QKeySequence(Qt.Key_Up), game_window)
         shortcut_up.setContext(Qt.WindowShortcut)
@@ -277,6 +278,17 @@ class GameWindow(QMainWindow):
         self._pending_resolution_label = self._resolution_label
         self._refresh_settings_items()
         self._open_overlay_ui("settings", self.settings_view)
+
+    def _handle_game_sidebar_action(self, action: str) -> None:
+        action_key = str(action).strip().lower()
+        if action_key == "save":
+            self._open_save_ui()
+            return
+        if action_key == "settings":
+            self._open_settings_ui()
+            return
+        if action_key == "terminal":
+            self._bring_terminal_above_game()
 
     @staticmethod
     def _prepare_widget_fullscreen_crt(widget: QWidget) -> None:
