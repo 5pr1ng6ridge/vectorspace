@@ -1,26 +1,37 @@
-"""Right-side icon drawer for graphical in-game UI."""
+"""Right-side icon drawer backed by sidebar_box.png."""
 
 from __future__ import annotations
 
 import time
 from typing import Any
 
-from PySide6.QtCore import QEvent, QEasingCurve, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import QEasingCurve, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QMouseEvent,
+    QPaintEvent,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
+from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from ..resources.paths import asset_path
 from .desktop_icon_button import DesktopIconButton
 
 
 class _SidebarHandle(QWidget):
     clicked = Signal()
 
-    CORNER_RADIUS_PX = 12
+    GLYPH_COLOR = QColor("#E4F4FF")
+    GLYPH_HOVER_COLOR = QColor("#FFFFFF")
+    GLYPH_PRESSED_COLOR = QColor("#9CCAFF")
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setAttribute(Qt.WA_Hover, True)
         self.setMouseTracking(True)
 
         self._expanded = False
@@ -65,111 +76,69 @@ class _SidebarHandle(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
-
         rect = self.rect().adjusted(1, 1, -1, -1)
         if rect.width() <= 0 or rect.height() <= 0:
             return
 
-        fill_color = QColor(16, 24, 39, 184)
-        border_color = QColor(122, 184, 255, 168)
-        glyph_color = QColor("#D8EEFF")
+        glyph = ">" if self._expanded else "<"
+        color = QColor(self.GLYPH_COLOR)
         if self._pressed:
-            fill_color = QColor(72, 118, 194, 216)
-            border_color = QColor(166, 214, 255, 228)
+            color = QColor(self.GLYPH_PRESSED_COLOR)
         elif self._hovered:
-            fill_color = QColor(30, 41, 62, 210)
-            border_color = QColor(148, 202, 255, 204)
+            color = QColor(self.GLYPH_HOVER_COLOR)
+
+        font = QFont(self.font())
+        font.setPixelSize(max(18, int(round(rect.height() * 0.42))))
+        font.setBold(True)
 
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        path = QPainterPath()
-        path.addRoundedRect(
-            float(rect.x()),
-            float(rect.y()),
-            float(rect.width()),
-            float(rect.height()),
-            float(self.CORNER_RADIUS_PX),
-            float(self.CORNER_RADIUS_PX),
-        )
-        painter.fillPath(path, fill_color)
-        painter.setPen(QPen(border_color, 1.2))
-        painter.drawPath(path)
-
-        chevron = QPainterPath()
-        inset_x = max(7.0, rect.width() * 0.28)
-        inset_y = max(18.0, rect.height() * 0.34)
-        top_y = float(rect.top()) + inset_y
-        mid_y = float(rect.center().y())
-        bottom_y = float(rect.bottom()) - inset_y
-        if self._expanded:
-            x0 = float(rect.left()) + inset_x
-            x1 = float(rect.right()) - inset_x
-        else:
-            x0 = float(rect.right()) - inset_x
-            x1 = float(rect.left()) + inset_x
-        chevron.moveTo(x0, top_y)
-        chevron.lineTo(x1, mid_y)
-        chevron.lineTo(x0, bottom_y)
-
-        painter.setPen(QPen(glyph_color, 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        painter.drawPath(chevron)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        painter.setPen(color)
+        painter.setFont(font)
+        painter.drawText(rect, Qt.AlignCenter, glyph)
 
 
 class SidebarDrawer(QWidget):
-    """Animated right-side drawer with vertically stacked desktop icon buttons."""
+    """Animated right-side drawer using the provided sidebar box artwork."""
 
     itemTriggered = Signal(str)
     expandedChanged = Signal(bool)
 
-    PANEL_WIDTH_PX = 176
-    HANDLE_WIDTH_PX = 28
-    HANDLE_HEIGHT_PX = 96
+    DESIGN_WIDTH = 214
+    DESIGN_HEIGHT = 584
+    DESIGN_PANEL_START_X = 30
+    DESIGN_CONTENT_LEFT = 58
+    DESIGN_CONTENT_RIGHT = 205
+    DESIGN_CONTENT_TOP = 26
+    DESIGN_CONTENT_BOTTOM = 24
+    DESIGN_HANDLE_RECT = QRect(4, 220, 40, 116)
     TOP_MARGIN_PX = 48
     BOTTOM_MARGIN_PX = 320
     RIGHT_MARGIN_PX = 14
-    PANEL_RADIUS_PX = 20
-    PANEL_LAYOUT_MARGIN_PX = 14
-    PANEL_LAYOUT_SPACING_PX = 10
-    PANEL_BG_COLOR = QColor(10, 16, 28, 176)
-    PANEL_BORDER_COLOR = QColor(120, 178, 255, 134)
-    PANEL_HILITE_COLOR = QColor(216, 238, 255, 34)
-    ANIMATION_DURATION_MS = 220
+    ANIMATION_DURATION_MS = 440
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFocusPolicy(Qt.NoFocus)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.NoFocus)
 
-        self._panel_width = self.PANEL_WIDTH_PX
-        self._handle_width = self.HANDLE_WIDTH_PX
-        self._handle_height = self.HANDLE_HEIGHT_PX
+        self._background_pixmap = QPixmap(str(asset_path("ui", "sidebar_box.png")))
+        self._background_scaled = QPixmap()
+        self._background_scaled_size: tuple[int, int] | None = None
+        self._buttons: list[DesktopIconButton] = []
         self._top_margin = self.TOP_MARGIN_PX
         self._bottom_margin = self.BOTTOM_MARGIN_PX
         self._right_margin = self.RIGHT_MARGIN_PX
         self._expanded = False
-        self._buttons: list[DesktopIconButton] = []
+        self._collapsed_visible_width = self.DESIGN_PANEL_START_X
         self._anim_from_x = 0
         self._anim_to_x = 0
         self._anim_started_at = 0.0
+        self._anim_curve = QEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim_timer = QTimer(self)
         self._anim_timer.setInterval(16)
         self._anim_timer.timeout.connect(self._on_anim_tick)
-        self._anim_curve = QEasingCurve(QEasingCurve.Type.OutCubic)
-
-        self._panel = QWidget(self)
-        self._panel.setAttribute(Qt.WA_TranslucentBackground, True)
-        self._panel.installEventFilter(self)
-
-        self._panel_layout = QVBoxLayout(self._panel)
-        self._panel_layout.setContentsMargins(
-            self.PANEL_LAYOUT_MARGIN_PX,
-            self.PANEL_LAYOUT_MARGIN_PX,
-            self.PANEL_LAYOUT_MARGIN_PX,
-            self.PANEL_LAYOUT_MARGIN_PX,
-        )
-        self._panel_layout.setSpacing(self.PANEL_LAYOUT_SPACING_PX)
-        self._panel_layout.addStretch(1)
 
         self._handle = _SidebarHandle(self)
         self._handle.clicked.connect(self.toggle)
@@ -178,22 +147,17 @@ class SidebarDrawer(QWidget):
         self.show()
         self._apply_host_geometry(self._target_x_for_state(self._expanded))
 
-    def eventFilter(self, watched, event) -> bool:
-        if watched is self._panel and event.type() in {
-            QEvent.MouseButtonPress,
-            QEvent.MouseButtonRelease,
-            QEvent.MouseButtonDblClick,
-            QEvent.MouseMove,
-        }:
-            event.accept()
-            return True
-        return super().eventFilter(watched, event)
-
     def is_expanded(self) -> bool:
         return self._expanded
 
     def toggle(self) -> None:
         self.set_expanded(not self._expanded)
+
+    def expand(self, *, animated: bool = True) -> None:
+        self.set_expanded(True, animated=animated)
+
+    def collapse(self, *, animated: bool = True) -> None:
+        self.set_expanded(False, animated=animated)
 
     def set_expanded(self, expanded: bool, *, animated: bool = True) -> None:
         next_value = bool(expanded)
@@ -221,19 +185,10 @@ class SidebarDrawer(QWidget):
     def set_sidebar_metrics(
         self,
         *,
-        panel_width: int | None = None,
-        handle_width: int | None = None,
-        handle_height: int | None = None,
         top_margin: int | None = None,
         bottom_margin: int | None = None,
         right_margin: int | None = None,
     ) -> None:
-        if panel_width is not None:
-            self._panel_width = max(96, int(panel_width))
-        if handle_width is not None:
-            self._handle_width = max(18, int(handle_width))
-        if handle_height is not None:
-            self._handle_height = max(42, int(handle_height))
         if top_margin is not None:
             self._top_margin = max(0, int(top_margin))
         if bottom_margin is not None:
@@ -249,22 +204,14 @@ class SidebarDrawer(QWidget):
             button.deleteLater()
         self._buttons.clear()
 
-        while self._panel_layout.count() > 0:
-            item = self._panel_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
         for raw_item in items:
             key = str(raw_item.get("id", "")).strip()
             if not key:
                 continue
 
             label = str(raw_item.get("label", key))
-            button = DesktopIconButton(label, self._panel)
-            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            button.set_icon_size((72, 72))
-            button.set_text_font_size(12)
+            button = DesktopIconButton(label, self)
+            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
             accent = raw_item.get("accent")
             if accent is not None:
@@ -283,51 +230,30 @@ class SidebarDrawer(QWidget):
             button.clicked.connect(
                 lambda item_key=key: self.itemTriggered.emit(item_key)
             )
-            self._panel_layout.addWidget(button)
             self._buttons.append(button)
 
-        self._panel_layout.addStretch(1)
+        self._layout_children()
         self.update()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._layout_children()
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        event.accept()
+
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
-
-        panel_rect = self._panel.geometry().adjusted(0, 0, -1, -1)
-        if panel_rect.width() <= 0 or panel_rect.height() <= 0:
+        self._ensure_scaled_background()
+        if self._background_scaled.isNull():
             return
 
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-
-        path = QPainterPath()
-        path.addRoundedRect(
-            float(panel_rect.x()),
-            float(panel_rect.y()),
-            float(panel_rect.width()),
-            float(panel_rect.height()),
-            float(self.PANEL_RADIUS_PX),
-            float(self.PANEL_RADIUS_PX),
-        )
-        painter.fillPath(path, self.PANEL_BG_COLOR)
-        painter.setPen(QPen(self.PANEL_BORDER_COLOR, 1.4))
-        painter.drawPath(path)
-
-        hilite_rect = panel_rect.adjusted(1, 1, -1, -1)
-        if hilite_rect.height() > 12:
-            hilite = QPainterPath()
-            hilite.addRoundedRect(
-                float(hilite_rect.x()),
-                float(hilite_rect.y()),
-                float(hilite_rect.width()),
-                float(max(20, int(hilite_rect.height() * 0.22))),
-                float(self.PANEL_RADIUS_PX - 2),
-                float(self.PANEL_RADIUS_PX - 2),
-            )
-            painter.fillPath(hilite, self.PANEL_HILITE_COLOR)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.drawPixmap(0, 0, self._background_scaled)
 
     def _on_anim_tick(self) -> None:
         elapsed_ms = (time.monotonic() - self._anim_started_at) * 1000.0
@@ -339,42 +265,107 @@ class SidebarDrawer(QWidget):
             self._anim_timer.stop()
             self._apply_host_geometry(self._anim_to_x)
 
-    def _layout_children(self) -> None:
-        self._panel.setGeometry(
-            self._handle_width,
-            0,
-            max(1, self.width() - self._handle_width),
-            max(1, self.height()),
+    def _ensure_scaled_background(self) -> None:
+        target_size = (max(1, self.width()), max(1, self.height()))
+        if self._background_scaled_size == target_size and not self._background_scaled.isNull():
+            return
+
+        if self._background_pixmap.isNull():
+            self._background_scaled = QPixmap()
+            self.clearMask()
+            self._background_scaled_size = target_size
+            return
+
+        self._background_scaled = self._background_pixmap.scaled(
+            target_size[0],
+            target_size[1],
+            Qt.IgnoreAspectRatio,
+            Qt.SmoothTransformation,
         )
-        handle_height = min(self.height(), self._handle_height)
-        handle_y = max(0, (self.height() - handle_height) // 2)
-        self._handle.setGeometry(0, handle_y, self._handle_width, handle_height)
+        self._background_scaled_size = target_size
+        self.setMask(self._background_scaled.mask())
+
+    def _content_rect(self) -> QRect:
+        width = max(1, self.width())
+        height = max(1, self.height())
+        left = int(round(self.DESIGN_CONTENT_LEFT * width / float(self.DESIGN_WIDTH)))
+        right = int(round(self.DESIGN_CONTENT_RIGHT * width / float(self.DESIGN_WIDTH)))
+        top = int(round(self.DESIGN_CONTENT_TOP * height / float(self.DESIGN_HEIGHT)))
+        bottom = int(round(self.DESIGN_CONTENT_BOTTOM * height / float(self.DESIGN_HEIGHT)))
+        return QRect(
+            left,
+            top,
+            max(1, right - left),
+            max(1, height - top - bottom),
+        )
+
+    def _handle_rect(self) -> QRect:
+        width = max(1, self.width())
+        height = max(1, self.height())
+        design_rect = self.DESIGN_HANDLE_RECT
+        return QRect(
+            int(round(design_rect.x() * width / float(self.DESIGN_WIDTH))),
+            int(round(design_rect.y() * height / float(self.DESIGN_HEIGHT))),
+            max(1, int(round(design_rect.width() * width / float(self.DESIGN_WIDTH)))),
+            max(1, int(round(design_rect.height() * height / float(self.DESIGN_HEIGHT)))),
+        )
+
+    def _layout_children(self) -> None:
+        self._ensure_scaled_background()
+        self._handle.setGeometry(self._handle_rect())
         self._handle.raise_()
-        self._panel.raise_()
+
+        if not self._buttons:
+            return
+
+        content_rect = self._content_rect()
+        button_count = len(self._buttons)
+        slot_height = content_rect.height() / float(button_count)
+        button_width = max(72, content_rect.width())
+        button_height = max(92, int(round(slot_height * 0.80)))
+        icon_size = max(42, min(button_width - 24, int(round(button_height * 0.52))))
+        text_size = max(10, min(16, int(round(slot_height * 0.14))))
+
+        for index, button in enumerate(self._buttons):
+            button.set_icon_size((icon_size, icon_size))
+            button.set_text_font_size(text_size)
+            target_width = button_width
+            target_height = button_height
+            slot_center_y = content_rect.top() + int(round((index + 0.5) * slot_height))
+            x = content_rect.left() + max(0, (content_rect.width() - target_width) // 2)
+            y = slot_center_y - target_height // 2
+            button.setGeometry(x, y, target_width, target_height)
+            button.raise_()
+
+    def _scaled_width_for_height(self, height: int) -> int:
+        return max(
+            1,
+            int(round(height * self.DESIGN_WIDTH / float(self.DESIGN_HEIGHT))),
+        )
 
     def _target_x_for_state(self, expanded: bool) -> int:
         parent = self.parentWidget()
         if parent is None:
             return 0
 
+        total_height = max(1, parent.height() - self._top_margin - self._bottom_margin)
+        total_width = self._scaled_width_for_height(total_height)
+        collapsed_visible_width = int(
+            round(total_width * self.DESIGN_PANEL_START_X / float(self.DESIGN_WIDTH))
+        )
+        self._collapsed_visible_width = max(1, collapsed_visible_width)
         if expanded:
-            return max(
-                0,
-                parent.width() - self._right_margin - self._panel_width - self._handle_width,
-            )
-        return max(0, parent.width() - self._right_margin - self._handle_width)
+            return max(0, parent.width() - total_width + 10)
+        return max(0, parent.width() - self._right_margin - self._collapsed_visible_width)
 
     def _apply_host_geometry(self, x: int) -> None:
         parent = self.parentWidget()
         if parent is None:
             return
 
-        total_width = self._panel_width + self._handle_width
-        total_height = max(
-            self._handle_height,
-            parent.height() - self._top_margin - self._bottom_margin,
-        )
+        total_height = max(1, parent.height() - self._top_margin - self._bottom_margin)
+        total_width = self._scaled_width_for_height(total_height)
         y = max(0, self._top_margin)
-        self.setGeometry(int(x), y, total_width, max(1, total_height))
+        self.setGeometry(int(x), y, total_width, total_height)
         self._layout_children()
         self.update()

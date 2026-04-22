@@ -20,7 +20,7 @@ from ..resources.fonts import load_font_family
 class _FullscreenTerminalPostProcess(QGraphicsEffect):
     STRIP_HEIGHT_PX = 1
     STRIP_OFFSET_PX = 0.8
-    CURVE_INSET_PX = 18.0
+    CURVE_INSET_PX = 24.0
     BLUR_PASSES: tuple[tuple[float, float, float], ...] = (
         (-1.2, 0.0, 0.10),
         (1.2, 0.0, 0.10),
@@ -127,7 +127,7 @@ class CrtTextEdit(QPlainTextEdit):
     BORDER_GLOW_ALPHA = 72
     GLASS_GLARE_ALPHA = 36
     CORNER_RADIUS_PX = 18
-    ENABLE_CRT_TINT = False
+    ENABLE_CRT_TINT = True
     ENABLE_APERTURE_GRILLE = True
     ENABLE_SCANLINES = True
     ENABLE_VIGNETTE = True

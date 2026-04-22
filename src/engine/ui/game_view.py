@@ -734,15 +734,16 @@ class GameView(QWidget):
             state.label.setGeometry(x_px, y_px, target_width, target_height)
 
     def _update_sidebar_geometry(self) -> None:
-        sx = self.width() / float(self.DESIGN_WIDTH) if self.width() > 0 else 1.0
         sy = self.height() / float(self.DESIGN_HEIGHT) if self.height() > 0 else 1.0
         self._sidebar_drawer.set_sidebar_metrics(
-            panel_width=int(round(self.SIDEBAR_PANEL_WIDTH_DESIGN * sx)),
-            handle_width=int(round(self.SIDEBAR_HANDLE_WIDTH_DESIGN * sx)),
-            handle_height=int(round(self.SIDEBAR_HANDLE_HEIGHT_DESIGN * sy)),
             top_margin=int(round(self.SIDEBAR_TOP_MARGIN_DESIGN * sy)),
             bottom_margin=int(round(self.SIDEBAR_BOTTOM_MARGIN_DESIGN * sy)),
-            right_margin=int(round(self.SIDEBAR_RIGHT_MARGIN_DESIGN * sx)),
+            right_margin=int(
+                round(
+                    self.SIDEBAR_RIGHT_MARGIN_DESIGN
+                    * (self.width() / float(self.DESIGN_WIDTH) if self.width() > 0 else 1.0)
+                )
+            ),
         )
 
     def _on_sidebar_item_triggered(self, action_id: str) -> None:
@@ -2098,13 +2099,14 @@ class GameView(QWidget):
         self._refresh_extra_textboxes_stack()
         self._setup_z_order()
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if self._paused:
-            event.accept()
-            return
-        if event.button() == Qt.LeftButton:
-            self.advanceRequested.emit()
-        super().mousePressEvent(event)
+    #暂不启用
+    #def mousePressEvent(self, event: QMouseEvent) -> None:
+    #    if self._paused:
+    #        event.accept()
+    #        return
+    #    if event.button() == Qt.LeftButton:
+    #        self.advanceRequested.emit()
+    #    super().mousePressEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape:
@@ -2112,10 +2114,19 @@ class GameView(QWidget):
             event.accept()
             return
 
+        if event.key() == Qt.Key_Left:
+            self._sidebar_drawer.expand()
+            event.accept()
+            return
+        if event.key() == Qt.Key_Right:
+            self._sidebar_drawer.collapse()
+            event.accept()
+            return
+
         if self._paused:
             event.accept()
             return
 
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.advanceRequested.emit()
         super().keyPressEvent(event)
