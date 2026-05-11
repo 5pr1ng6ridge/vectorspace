@@ -322,9 +322,9 @@ class SidebarDrawer(QWidget):
         button_count = len(self._buttons)
         slot_height = content_rect.height() / float(button_count)
         button_width = max(72, content_rect.width())
-        button_height = max(92, int(round(slot_height * 0.80)))
-        icon_size = max(42, min(button_width - 24, int(round(button_height * 0.52))))
-        text_size = max(10, min(16, int(round(slot_height * 0.14))))
+        button_height = max(92, int(round(slot_height)))
+        icon_size = max(42, min(button_width - 24, int(round(button_height * 0.7))))
+        text_size = max(10, min(18, int(round(slot_height * 0.3))))
 
         for index, button in enumerate(self._buttons):
             button.set_icon_size((icon_size, icon_size))
@@ -366,6 +366,11 @@ class SidebarDrawer(QWidget):
         total_height = max(1, parent.height() - self._top_margin - self._bottom_margin)
         total_width = self._scaled_width_for_height(total_height)
         y = max(0, self._top_margin)
-        self.setGeometry(int(x), y, total_width, total_height)
-        self._layout_children()
-        self.update()
+        next_geometry = QRect(int(x), y, total_width, total_height)
+        if self.geometry() == next_geometry:
+            return
+
+        previous_size = self.size()
+        self.setGeometry(next_geometry)
+        if previous_size == next_geometry.size():
+            self.update()

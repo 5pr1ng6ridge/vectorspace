@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 from typing import Any, Callable
 
-from PySide6.QtCore import QEasingCurve, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEasingCurve, QPoint, QRect, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QFont, QKeyEvent, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QWidget
 from PySide6.QtMultimedia import QSoundEffect
@@ -15,6 +15,7 @@ from PySide6.QtMultimedia import QSoundEffect
 from ..resources.fonts import load_font_family
 from ..resources.paths import asset_path
 from .dialogue_text import DialogueSegment, DialogueTextView
+from .floating_panel_window import FloatingPanelWindow
 from .sidebar_drawer import SidebarDrawer
 
 
@@ -152,12 +153,18 @@ class _PauseHintState:
     strength: float = 0.0
 
 
+@dataclass
+class _SidebarPopupState:
+    popup_id: str
+    window: FloatingPanelWindow
+    rect_design: QRect
+
+
 class GameView(QWidget):
     """承载游戏画面的主 Widget。"""
 
     advanceRequested = Signal()
     pauseStateChanged = Signal(bool)
-    sidebarActionRequested = Signal(str)
 
     DESIGN_WIDTH = 1920
     DESIGN_HEIGHT = 1080
@@ -189,28 +196,40 @@ class GameView(QWidget):
     SIDEBAR_BOTTOM_MARGIN_DESIGN = 316.0
     SIDEBAR_ITEMS = (
         {
-            "id": "save",
-            "label": "SAVE",
-            "icon_asset": ("ui", "sidebar_demo", "save.png"),
+            "id": "notebook",
+            "label": "笔记本...?",
+            "icon_asset": ("ui", "sidebar_demo", "notebook.png"),
             "accent": "#6AA9FF",
+            "panel_title": "notebook",
+            "panel_rect": QRect(236, 112, 620, 432),
+            "content_asset": ("ui", "sidebar_demo", "panel_archive.png"),
         },
         {
-            "id": "settings",
-            "label": "SETTINGS",
-            "icon_asset": ("ui", "sidebar_demo", "settings.png"),
-            "accent": "#FFD36A",
+            "id": "phone",
+            "label": "手机。",
+            "icon_asset": ("ui", "sidebar_demo", "phone.png"),
+            "accent": "#3A3A3A",
+            "panel_title": "phone",
+            "panel_rect": QRect(336, 176, 620, 432),
+            "content_asset": ("ui", "sidebar_demo", "panel_config.png"),
         },
         {
-            "id": "terminal",
-            "label": "TERMINAL",
-            "icon_asset": ("ui", "sidebar_demo", "terminal.png"),
-            "accent": "#7BF0C8",
+            "id": "pc",
+            "label": "电脑。",
+            "icon_asset": ("ui", "sidebar_demo", "pc.png"),
+            "accent": "#BBBBBB",
+            "panel_title": "pc",
+            "panel_rect": QRect(436, 240, 620, 432),
+            "content_asset": ("ui", "sidebar_demo", "panel_terminal.png"),
         },
         {
-            "id": "pause",
-            "label": "PAUSE",
-            "icon_asset": ("ui", "sidebar_demo", "pause.png"),
+            "id": "box",
+            "label": "一些，东西。",
+            "icon_asset": ("ui", "sidebar_demo", "box.png"),
             "accent": "#FF8E9E",
+            "panel_title": "box",
+            "panel_rect": QRect(536, 304, 620, 432),
+            "content_asset": ("ui", "sidebar_demo", "panel_pause.png"),
         },
     )
     PAUSE_HINT_ITEMS: tuple[tuple[str, int], ...] = (
@@ -282,6 +301,12 @@ class GameView(QWidget):
         self._sidebar_drawer = SidebarDrawer(self)
         self._sidebar_drawer.set_items(list(self.SIDEBAR_ITEMS))
         self._sidebar_drawer.itemTriggered.connect(self._on_sidebar_item_triggered)
+        self._sidebar_item_specs = {
+            str(item.get("id", "")).strip().lower(): item
+            for item in self.SIDEBAR_ITEMS
+            if str(item.get("id", "")).strip()
+        }
+        self._sidebar_popups: dict[str, _SidebarPopupState] = {}
 
         self._asset_resolve_cache: dict[tuple[str, str | None], str | None] = {}
         self._audio_resolve_cache: dict[tuple[str, str | None], str | None] = {}
@@ -311,6 +336,8 @@ class GameView(QWidget):
         self._scene_noise_timer.setInterval(self.SCENE_NOISE_FRAME_MS)
         self._scene_noise_timer.timeout.connect(self._on_scene_noise_tick)
         self._scene_noise_frames: list[QPixmap] = self._load_scene_noise_frames()
+        self._scene_noise_scaled_frames: list[QPixmap] = []
+        self._scene_noise_scaled_size: tuple[int, int] | None = None
         self._scene_noise_index = 0
         self._scene_noise_on_finished: Callable[[], None] | None = None
         self._dialogue_font_family = ""
@@ -334,6 +361,9 @@ class GameView(QWidget):
         self.name_label.raise_()
         self.text_label.raise_()
         self._sidebar_drawer.raise_()
+        for state in self._sidebar_popups.values():
+            if state.window.isVisible():
+                state.window.raise_()
         self._scene_noise_overlay.raise_()
         self._pause_overlay.raise_()
         self._pause_hint_root.raise_()
@@ -745,15 +775,111 @@ class GameView(QWidget):
                 )
             ),
         )
+        self._update_sidebar_popups_geometry()
 
     def _on_sidebar_item_triggered(self, action_id: str) -> None:
-        action = str(action_id).strip().lower()
-        if not action:
+        popup_id = str(action_id).strip().lower()
+        if not popup_id:
             return
-        if action == "pause":
-            self.toggle_paused()
+
+        popup = self._ensure_sidebar_popup(popup_id)
+        if popup is None:
             return
-        self.sidebarActionRequested.emit(action)
+
+        if not popup.isVisible():
+            popup.show()
+        self._bring_sidebar_popup_to_front(popup_id)
+
+    def _ensure_sidebar_popup(self, popup_id: str) -> FloatingPanelWindow | None:
+        popup_key = str(popup_id).strip().lower()
+        if not popup_key:
+            return None
+
+        existing = self._sidebar_popups.get(popup_key)
+        if existing is not None:
+            return existing.window
+
+        spec = self._sidebar_item_specs.get(popup_key)
+        if spec is None:
+            return None
+
+        window = FloatingPanelWindow(
+            str(spec.get("panel_title", popup_key)),
+            self,
+            accent=str(spec.get("accent", "#6AA9FF")),
+        )
+
+        content_asset = spec.get("content_asset")
+        if isinstance(content_asset, (list, tuple)) and content_asset:
+            window.set_content_asset(*[str(part) for part in content_asset])
+
+        panel_rect = spec.get("panel_rect")
+        design_rect = (
+            QRect(panel_rect)
+            if isinstance(panel_rect, QRect)
+            else QRect(280, 140, 620, 432)
+        )
+        self._sidebar_popups[popup_key] = _SidebarPopupState(
+            popup_id=popup_key,
+            window=window,
+            rect_design=design_rect,
+        )
+
+        window.positionChanged.connect(
+            lambda position, key=popup_key: self._store_sidebar_popup_position(key, position)
+        )
+        window.activated.connect(
+            lambda key=popup_key: self._bring_sidebar_popup_to_front(key)
+        )
+        window.closed.connect(self._setup_z_order)
+        window.hide()
+        self._apply_sidebar_popup_geometry(popup_key)
+        return window
+
+    def _bring_sidebar_popup_to_front(self, popup_id: str) -> None:
+        state = self._sidebar_popups.get(str(popup_id).strip().lower())
+        if state is None:
+            return
+        state.window.raise_()
+        self._scene_noise_overlay.raise_()
+        self._pause_overlay.raise_()
+        self._pause_hint_root.raise_()
+
+    def _store_sidebar_popup_position(self, popup_id: str, position: QPoint) -> None:
+        state = self._sidebar_popups.get(str(popup_id).strip().lower())
+        if state is None:
+            return
+
+        width = max(1, self.width())
+        height = max(1, self.height())
+        max_x = max(0, self.DESIGN_WIDTH - state.rect_design.width())
+        max_y = max(0, self.DESIGN_HEIGHT - state.rect_design.height())
+        design_x = int(round(position.x() * self.DESIGN_WIDTH / float(width)))
+        design_y = int(round(position.y() * self.DESIGN_HEIGHT / float(height)))
+        state.rect_design.moveTo(
+            max(0, min(max_x, design_x)),
+            max(0, min(max_y, design_y)),
+        )
+
+    def _apply_sidebar_popup_geometry(self, popup_id: str) -> None:
+        state = self._sidebar_popups.get(str(popup_id).strip().lower())
+        if state is None:
+            return
+
+        design_rect = state.rect_design
+        width = max(1, self.width())
+        height = max(1, self.height())
+        mapped_rect = QRect(
+            int(round(design_rect.x() * width / float(self.DESIGN_WIDTH))),
+            int(round(design_rect.y() * height / float(self.DESIGN_HEIGHT))),
+            max(280, int(round(design_rect.width() * width / float(self.DESIGN_WIDTH)))),
+            max(220, int(round(design_rect.height() * height / float(self.DESIGN_HEIGHT)))),
+        )
+        state.window.setGeometry(mapped_rect)
+
+    def _update_sidebar_popups_geometry(self) -> None:
+        for popup_id in list(self._sidebar_popups):
+            self._apply_sidebar_popup_geometry(popup_id)
 
     def _finish_pause_exit(self) -> None:
         self._pause_ui_timer.stop()
@@ -2036,19 +2162,29 @@ class GameView(QWidget):
     def _apply_scene_noise_frame(self, frame_index: int) -> None:
         if frame_index < 0 or frame_index >= len(self._scene_noise_frames):
             return
-        frame = self._scene_noise_frames[frame_index]
-        if frame.isNull():
-            return
 
         target_size = self._scene_noise_overlay.size()
         if target_size.width() <= 0 or target_size.height() <= 0:
             target_size = self.size()
-        scaled = frame.scaled(
-            target_size,
-            Qt.KeepAspectRatioByExpanding,
-            Qt.SmoothTransformation,
-        )
-        self._scene_noise_overlay.setPixmap(scaled)
+        target_key = (max(1, target_size.width()), max(1, target_size.height()))
+        if self._scene_noise_scaled_size != target_key or len(
+            self._scene_noise_scaled_frames
+        ) != len(self._scene_noise_frames):
+            self._scene_noise_scaled_frames = [
+                frame.scaled(
+                    target_key[0],
+                    target_key[1],
+                    Qt.KeepAspectRatioByExpanding,
+                    Qt.SmoothTransformation,
+                )
+                for frame in self._scene_noise_frames
+            ]
+            self._scene_noise_scaled_size = target_key
+
+        frame = self._scene_noise_scaled_frames[frame_index]
+        if frame.isNull():
+            return
+        self._scene_noise_overlay.setPixmap(frame)
 
     def _on_scene_noise_tick(self) -> None:
         self._scene_noise_index += 1

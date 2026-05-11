@@ -29,6 +29,12 @@ class SceneManager:
         self._close_game_callback = close_game_callback
         self._scene_changed_callback = scene_changed_callback
 
+    def dispose(self) -> None:
+        if self.current_runner is not None:
+            self.current_runner.dispose()
+        self.current_runner = None
+        self.current_scene_name = None
+
     def load_scene(
         self,
         scene_name: str,

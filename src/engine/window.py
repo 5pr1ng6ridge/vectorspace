@@ -138,7 +138,6 @@ class GameWindow(QMainWindow):
         game_window.setCentralWidget(game_view)
         game_window.installEventFilter(self)
         game_view.installEventFilter(self)
-        game_view.sidebarActionRequested.connect(self._handle_game_sidebar_action)
 
         shortcut_up = QShortcut(QKeySequence(Qt.Key_Up), game_window)
         shortcut_up.setContext(Qt.WindowShortcut)
@@ -279,17 +278,6 @@ class GameWindow(QMainWindow):
         self._refresh_settings_items()
         self._open_overlay_ui("settings", self.settings_view)
 
-    def _handle_game_sidebar_action(self, action: str) -> None:
-        action_key = str(action).strip().lower()
-        if action_key == "save":
-            self._open_save_ui()
-            return
-        if action_key == "settings":
-            self._open_settings_ui()
-            return
-        if action_key == "terminal":
-            self._bring_terminal_above_game()
-
     @staticmethod
     def _prepare_widget_fullscreen_crt(widget: QWidget) -> None:
         if isinstance(widget, CrtTextEdit):
@@ -362,14 +350,16 @@ class GameWindow(QMainWindow):
         if self._overlay_mode is None:
             return
 
+        resume_game_after_overlay = self._resume_game_after_overlay
+        self._resume_game_after_overlay = False
+
         self._overlay_mode = None
         self._stack.setCurrentWidget(self.terminal_view)
         self._set_terminal_windowed_after_start()
         self.lower()
 
-        if self._game_view is not None and self._resume_game_after_overlay:
+        if self._game_view is not None and resume_game_after_overlay:
             self._game_view.set_paused(False, animate=False)
-        self._resume_game_after_overlay = False
 
         if self._game_window is not None and self._game_window.isVisible():
             self._game_window.raise_()
@@ -421,6 +411,7 @@ class GameWindow(QMainWindow):
         if self._game_window is not None and self._game_window.isVisible():
             return
 
+        self._dispose_game_session()
         self._overlay_mode = None
         self._resume_game_after_overlay = False
         self._stack.setCurrentWidget(self.terminal_view)
@@ -430,6 +421,34 @@ class GameWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
         self.terminal_view.ensure_input_mode(append_prompt=True)
+
+    def _dispose_game_session(self) -> None:
+        if self._scene_manager is not None:
+            self._scene_manager.dispose()
+
+        game_window = self._game_window
+        game_view = self._game_view
+        if game_window is not None:
+            try:
+                game_window.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        if game_view is not None:
+            try:
+                game_view.removeEventFilter(self)
+            except RuntimeError:
+                pass
+
+        self._game_window = None
+        self._game_view = None
+        self._scene_manager = None
+        self._loaded_scene_name = None
+        self._skip_next_game_close_confirm = False
+        self._shortcut_terminal_up = None
+        self._shortcut_terminal_down = None
+
+        if game_window is not None:
+            game_window.deleteLater()
 
     def close_game_view(self, *, confirm: bool = True) -> bool:
         if self._game_window is None or not self._game_window.isVisible():

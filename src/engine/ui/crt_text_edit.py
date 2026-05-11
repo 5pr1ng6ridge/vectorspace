@@ -20,7 +20,7 @@ from ..resources.fonts import load_font_family
 class _FullscreenTerminalPostProcess(QGraphicsEffect):
     STRIP_HEIGHT_PX = 1
     STRIP_OFFSET_PX = 0.8
-    CURVE_INSET_PX = 24.0
+    CURVE_INSET_PX = 18.0
     BLUR_PASSES: tuple[tuple[float, float, float], ...] = (
         (-1.2, 0.0, 0.10),
         (1.2, 0.0, 0.10),
