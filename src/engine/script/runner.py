@@ -273,7 +273,8 @@ class ScriptRunner:
             self.typing = False
 
             self.view.set_name("")
-            expr = node.get("latex", "")
+            expr_value = node.get("latex", "")
+            expr = expr_value if isinstance(expr_value, str) else str(expr_value)
             if not expr:
                 self.view.show_text("(空公式节点)")
             else:
@@ -407,7 +408,8 @@ class ScriptRunner:
 
     def _show_formula_node_completed(self, node: dict[str, Any]) -> None:
         self.view.set_name("")
-        expr = node.get("latex", "")
+        expr_value = node.get("latex", "")
+        expr = expr_value if isinstance(expr_value, str) else str(expr_value)
         if not expr:
             self.view.show_text("(空公式节点)")
             return
@@ -457,7 +459,7 @@ class ScriptRunner:
         self._advance_to_next_node()
 
     def _run_background_node(self, node: dict[str, Any]) -> None:
-        filename = node.get("file", "")
+        filename = self._read_str(node, "file", "path", "src")
         if filename:
             self.view.set_background(filename)
 
@@ -999,6 +1001,8 @@ class ScriptRunner:
         self._show_current_node()
 
     def _start_typewriter(self, text: str) -> None:
+        if not isinstance(text, str):
+            text = str(text)
         self.current_segments = parse_dialogue_segments(text)
         self.current_total_units = count_reveal_units(self.current_segments)
         self.current_index = 0

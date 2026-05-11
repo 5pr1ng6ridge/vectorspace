@@ -585,7 +585,7 @@ class GameView(QWidget):
         self._update_bg_geometry()
 
     def set_name(self, name: str) -> None:
-        self.name_label.setText(name)
+        self.name_label.setText(name if isinstance(name, str) else str(name))
 
     def show_text(self, text: str) -> None:
         self.text_label.set_plain_dialogue(text)
@@ -1968,7 +1968,7 @@ class GameView(QWidget):
                 Qt.SmoothTransformation,
             )
             state.scaled_size = scaled_size
-        state.label.setPixmap(state.scaled_pixmap)
+            state.label.setPixmap(state.scaled_pixmap)
         state.opacity_effect.setOpacity(self._clamp_opacity(state.opacity))
         state.label.setVisible(state.visible)
 

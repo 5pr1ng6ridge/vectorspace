@@ -800,29 +800,6 @@ class TerminalView(CrtTextEdit):
         # 未知 step，跳过
         QTimer.singleShot(0, self._run_next_step)
         
-    def _run_progress_step(
-        self,
-        step: ProgressStep,
-        on_finished: Callable[[], None],
-    ) -> None:
-        current = step.start
-
-        # 这里假定上一行已经存在，比如：
-        # PrintLineStep("Loading resources 0%")
-        # 然后 ProgressStep 负责不断替换它
-        def tick() -> None:
-            nonlocal current
-
-            self._replace_last_line(f"{step.prefix} {current}%")
-
-            if current >= step.end:
-                on_finished()
-                return
-
-            current = min(current + step.step, step.end)
-            QTimer.singleShot(step.interval_ms, tick)
-
-        tick()
         
     def _run_dots_step(
         self,

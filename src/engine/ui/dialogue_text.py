@@ -958,7 +958,15 @@ class DialogueTextView(QWidget):
     def setFont(self, font: QFont) -> None:
         super().setFont(font)
         self._font_family = font.family() or "sans-serif"
-        self._font_size_px = max(1, int(round(font.pointSizeF())))
+        pixel_size = int(font.pixelSize())
+        point_size = float(font.pointSizeF())
+        if pixel_size > 0:
+            resolved_size = pixel_size
+        elif point_size > 0:
+            resolved_size = int(round(point_size))
+        else:
+            resolved_size = self._font_size_px
+        self._font_size_px = max(1, resolved_size)
         self._reload_shell()
 
     def set_text_style(
@@ -1087,13 +1095,19 @@ class DialogueTextView(QWidget):
         )
         self._web_view.setHtml(shell_html, self._base_url)
 
-    def _set_content_html(self, html_content: str) -> None:
+    def _set_content_html(self, html_content: str, *, force: bool = False) -> None:
+        html_unchanged = html_content == self._current_html
         self._current_html = html_content
         self._continuous_capture = _html_has_animated_effects(html_content)
+        if html_unchanged and self._page_ready and not force:
+            self._update_capture_timer()
+            return
+
         self._request_snapshot(frames=_capture_burst_frames(html_content))
         payload = json.dumps(html_content)
         script = f"window.__applyDialogueHtml({payload});"
         if self._page_ready:
+            self._pending_html = None
             self._web_page.runJavaScript(script)
             self._apply_pause_dim()
             return
@@ -1103,9 +1117,11 @@ class DialogueTextView(QWidget):
         self._page_ready = ok
         if not ok:
             return
-        if self._pending_html is None:
+        pending_html = self._pending_html
+        self._pending_html = None
+        if pending_html is None:
             return
-        self._set_content_html(self._pending_html)
+        self._set_content_html(pending_html, force=True)
         self._apply_pause_dim()
 
     def _on_web_render_ready(self) -> None:

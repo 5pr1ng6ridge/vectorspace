@@ -50,10 +50,12 @@ class SaveSystem:
         )
 
         path = self._slot_path(normalized_slot)
-        path.write_text(
+        temp_path = path.with_name(f".{path.name}.tmp")
+        temp_path.write_text(
             json.dumps(stored_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        temp_path.replace(path)
         return stored_payload
 
     def load_slot(self, slot_index: int) -> dict[str, Any] | None:

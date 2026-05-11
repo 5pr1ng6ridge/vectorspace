@@ -107,11 +107,24 @@ class SceneManager:
         if not scene_name or not isinstance(runner_state, dict):
             return False
 
+        try:
+            load_scene_script(scene_name)
+        except Exception as exc:
+            print(f"[SceneManager] load save failed: {scene_name} ({exc})")
+            return False
+
+        previous_persistent_state = deepcopy(self.persistent_state)
         self.persistent_state.clear()
         if isinstance(persistent_state, dict):
             self.persistent_state.update(deepcopy(persistent_state))
 
-        self.load_scene(scene_name, restore_snapshot=runner_state)
+        try:
+            self.load_scene(scene_name, restore_snapshot=runner_state)
+        except Exception as exc:
+            self.persistent_state.clear()
+            self.persistent_state.update(previous_persistent_state)
+            print(f"[SceneManager] restore save failed: {scene_name} ({exc})")
+            return False
         return True
 
     def _on_runner_node(
